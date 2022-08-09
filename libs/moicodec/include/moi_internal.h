@@ -15,16 +15,27 @@
 
 /* min以上max未満に制限 */
 #define MOI_INNER_VAL(val, min, max) \
-  MOI_MAX_VAL(min, MOI_MIN_VAL(max, val))
+    MOI_MAX_VAL(min, MOI_MIN_VAL(max, val))
+
+/* 静的アサート */
+#define MOI_STATIC_ASSERT(expr) { void static_assertion_failed(char dummy[(expr) ? 1 : -1]); }
+
+/* アサートマクロ */
+#ifdef DEBUG
+#include <assert.h>
+#define MOI_ASSERT(condition) assert(condition)
+#else
+#define MOI_ASSERT(condition) (void)(condition)
+#endif
 
 /* 内部エラー型 */
 typedef enum {
-  MOI_ERROR_OK = 0,              /* OK */
-  MOI_ERROR_NG,                  /* 分類不能な失敗 */
-  MOI_ERROR_INVALID_ARGUMENT,    /* 不正な引数 */
-  MOI_ERROR_INVALID_FORMAT,      /* 不正なフォーマット       */
-  MOI_ERROR_INSUFFICIENT_BUFFER, /* バッファサイズが足りない */
-  MOI_ERROR_INSUFFICIENT_DATA    /* データサイズが足りない   */
+    MOI_ERROR_OK = 0,              /* OK */
+    MOI_ERROR_NG,                  /* 分類不能な失敗 */
+    MOI_ERROR_INVALID_ARGUMENT,    /* 不正な引数 */
+    MOI_ERROR_INVALID_FORMAT,      /* 不正なフォーマット       */
+    MOI_ERROR_INSUFFICIENT_BUFFER, /* バッファサイズが足りない */
+    MOI_ERROR_INSUFFICIENT_DATA    /* データサイズが足りない   */
 } MOIError;
 
 /* インデックス変動テーブル */

@@ -12,6 +12,12 @@
 /* サンプルあたりビット数は4で固定 */
 #define MOI_BITS_PER_SAMPLE 4
 
+/* ビームサーチの最大幅 */
+#define MOI_MAX_BEAM_WIDTH 8
+
+/* 最大先読みサンプル数 */
+#define MOI_MAX_DEPTH 4
+
 /* API結果型 */
 typedef enum {
     MOI_APIRESULT_OK = 0,              /* 成功                         */
@@ -35,12 +41,19 @@ struct IMAADPCMWAVHeader {
     uint32_t header_size;           /* ファイル先頭からdata領域先頭までのオフセット */
 };
 
+/* エンコーダ生成コンフィグ */
+struct MOIEncoderConfig {
+    uint16_t max_block_size;        /* 最大ブロックサイズ                           */
+};
+
 /* エンコードパラメータ */
 struct MOIEncodeParameter {
     uint16_t num_channels;          /* チャンネル数                                 */
     uint32_t sampling_rate;         /* サンプリングレート                           */
     uint16_t bits_per_sample;       /* サンプルあたりビット数（今の所4で固定）      */
     uint16_t block_size;            /* ブロックサイズ[byte]                         */
+    uint32_t search_beam_width;     /* 探索ビーム幅                                 */
+    uint32_t search_depth;          /* 探索深さ                                     */
 };
 
 /* デコーダハンドル */
@@ -77,10 +90,11 @@ MOIApiResult MOIDecoder_DecodeWhole(
         int16_t **buffer, uint32_t buffer_num_channels, uint32_t buffer_num_samples);
 
 /* エンコーダワークサイズ計算 */
-int32_t MOIEncoder_CalculateWorkSize(void);
+int32_t MOIEncoder_CalculateWorkSize(const struct MOIEncoderConfig *config);
 
 /* エンコーダハンドル作成 */
-struct MOIEncoder *MOIEncoder_Create(void *work, int32_t work_size);
+struct MOIEncoder *MOIEncoder_Create(
+        const struct MOIEncoderConfig *config, void *work, int32_t work_size);
 
 /* エンコーダハンドル破棄 */
 void MOIEncoder_Destroy(struct MOIEncoder *encoder);

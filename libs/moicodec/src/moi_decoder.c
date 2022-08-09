@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
 
 #include "moi_internal.h"
 #include "byte_array.h"
@@ -200,7 +199,7 @@ MOIApiResult MOIDecoder_DecodeHeader(
             ByteArray_GetUint32LE(data_pos, &u32buf);
             tmp_header.num_samples = u32buf;
             /* factチャンクを見つけたことをマーク */
-            assert(find_fact_chunk == 0);
+            MOI_ASSERT(find_fact_chunk == 0);
             find_fact_chunk = 1;
         } else {
             uint32_t size;
@@ -237,7 +236,7 @@ static int16_t MOICoreDecoder_DecodeSample(
     int8_t  idx;
     int32_t predict, qdiff, delta, stepsize;
 
-    assert(decoder != NULL);
+    MOI_ASSERT(decoder != NULL);
 
     /* 頻繁に参照する変数をオート変数に受ける */
     predict = decoder->sample_val;
@@ -311,7 +310,7 @@ static MOIError MOIDecoder_DecodeBlockMono(
 
     /* ブロックデータデコード */
     for (smpl = 1; smpl < tmp_num_decode_samples; smpl += 2) {
-        assert((uint32_t)(read_pos - read_head) < data_size);
+        MOI_ASSERT((uint32_t)(read_pos - read_head) < data_size);
         ByteArray_GetUint8(read_pos, &u8buf);
         nibble[0] = (u8buf >> 0) & 0xF;
         nibble[1] = (u8buf >> 4) & 0xF;
@@ -369,7 +368,7 @@ static MOIError MOIDecoder_DecodeBlockStereo(
         uint32_t smp;
         int16_t  buf[8];
         for (ch = 0; ch < 2; ch++) {
-            assert((uint32_t)(read_pos - read_head) < data_size);
+            MOI_ASSERT((uint32_t)(read_pos - read_head) < data_size);
             ByteArray_GetUint32LE(read_pos, &u32buf);
             nibble[0] = (uint8_t)((u32buf >>  0) & 0xF);
             nibble[1] = (uint8_t)((u32buf >>  4) & 0xF);

@@ -3,7 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
+#include <float.h>
+#include <math.h>
 
 #include "moi_internal.h"
 #include "byte_array.h"
@@ -13,40 +14,35 @@
 
 /* 指定サンプル数が占めるデータサイズ[byte]を計算 */
 #define MOI_CALCULATE_DATASIZE_BYTE(num_samples, bits_per_sample) \
-  (MOI_ROUND_UP((num_samples) * (bits_per_sample), 8) / 8)
+    (MOI_ROUND_UP((num_samples) * (bits_per_sample), 8) / 8)
+
+/* 符号語の個数 */
+#define MOIENCODER_NUM_CODES (1 << MOI_BITS_PER_SAMPLE)
 
 /* コア処理エンコーダ */
 struct MOICoreEncoder {
     int16_t prev_sample; /* サンプル値 */
     int8_t stepsize_index; /* ステップサイズテーブルの参照インデックス */
+    double total_cost; /* これまでのコスト */
+};
+
+/* エンコーダ候補 */
+struct MOICoreEncoderCandidate {
+    struct MOICoreEncoder encoder;
+    uint8_t *code;
 };
 
 /* エンコーダ */
 struct MOIEncoder {
-    struct MOIEncodeParameter encode_paramemter;
+    struct MOIEncodeParameter encode_parameter;
+    uint16_t max_block_size;
     uint8_t set_parameter;
     struct MOICoreEncoder core_encoder[MOI_MAX_NUM_CHANNELS];
+    uint8_t *best_code[MOI_MAX_NUM_CHANNELS];
+    struct MOICoreEncoderCandidate candidate[MOI_MAX_BEAM_WIDTH];
+    struct MOICoreEncoderCandidate backup[MOI_MAX_BEAM_WIDTH];
     void *work;
 };
-
-/* 単一データブロックエンコード */
-/* デコードとは違いstaticに縛る: エンコーダが内部的に状態を持ち、連続でEncodeBlockを呼ぶ必要があるから */
-static MOIApiResult MOIEncoder_EncodeBlock(
-        struct MOIEncoder *encoder,
-        const int16_t *const *input, uint32_t num_samples, 
-        uint8_t *data, uint32_t data_size, uint32_t *output_size);
-
-/* モノラルブロックのエンコード */
-static MOIError MOIEncoder_EncodeBlockMono(
-        struct MOICoreEncoder *core_encoder,
-        const int16_t *const *input, uint32_t num_samples,
-        uint8_t *data, uint32_t data_size, uint32_t *output_size);
-
-/* ステレオブロックのエンコード */
-static MOIError MOIEncoder_EncodeBlockStereo(
-        struct MOICoreEncoder *core_encoder,
-        const int16_t *const *input, uint32_t num_samples,
-        uint8_t *data, uint32_t data_size, uint32_t *output_size);
 
 /* ヘッダエンコード */
 MOIApiResult MOIEncoder_EncodeHeader(
@@ -72,7 +68,7 @@ MOIApiResult MOIEncoder_EncodeHeader(
     }
 
     /* データサイズ計算 */
-    assert(header->num_samples_per_block != 0);
+    MOI_ASSERT(header->num_samples_per_block != 0);
     num_blocks = (header->num_samples / header->num_samples_per_block) + 1;
     data_chunk_size = header->block_size * num_blocks;
     /* 末尾のブロックの剰余サンプルサイズだけ減じる */
@@ -150,27 +146,55 @@ MOIApiResult MOIEncoder_EncodeHeader(
 }
 
 /* エンコーダワークサイズ計算 */
-int32_t MOIEncoder_CalculateWorkSize(void)
+int32_t MOIEncoder_CalculateWorkSize(const struct MOIEncoderConfig *config)
 {
-    return MOI_ALIGNMENT + sizeof(struct MOIEncoder);
+    int32_t work_size;
+
+    /* 引数チェック */
+    if (config == NULL) {
+        return -1;
+    }
+
+    /* コンフィグチェック */
+    if (config->max_block_size == 0) {
+        return -1;
+    }
+
+    /* ハンドルサイズ */
+    work_size = MOI_ALIGNMENT + sizeof(struct MOIEncoder);
+
+    /* 符号領域 チャンネル数 + 候補 + 候補バックアップ */
+    /* 1バイトあたり2サンプル入りうるので2倍確保 */
+    work_size += (MOI_MAX_NUM_CHANNELS + (2 * MOI_MAX_BEAM_WIDTH)) * (MOI_ALIGNMENT + (2 * config->max_block_size));
+
+    return work_size;
 }
 
 /* エンコーダハンドル作成 */
-struct MOIEncoder *MOIEncoder_Create(void *work, int32_t work_size)
+struct MOIEncoder *MOIEncoder_Create(
+        const struct MOIEncoderConfig *config, void *work, int32_t work_size)
 {
     struct MOIEncoder *encoder;
     uint8_t *work_ptr;
-    uint32_t alloced_by_malloc = 0;
+    uint32_t i, alloced_by_malloc = 0;
 
     /* 領域自前確保の場合 */
     if ((work == NULL) && (work_size == 0)) {
-        work_size = MOIEncoder_CalculateWorkSize();
-        work = malloc((uint32_t)work_size);
+        if ((work_size = MOIEncoder_CalculateWorkSize(config)) < 0) {
+            return NULL;
+        }
+        work = malloc((size_t)work_size);
         alloced_by_malloc = 1;
     }
 
     /* 引数チェック */
-    if ((work == NULL) || (work_size < MOIEncoder_CalculateWorkSize())) {
+    if ((config == NULL) || (work == NULL)
+            || (work_size < MOIEncoder_CalculateWorkSize(config))) {
+        return NULL;
+    }
+
+    /* コンフィグチェック */
+    if (config->max_block_size == 0) {
         return NULL;
     }
 
@@ -179,15 +203,37 @@ struct MOIEncoder *MOIEncoder_Create(void *work, int32_t work_size)
     /* アラインメントを揃えてから構造体を配置 */
     work_ptr = (uint8_t *)MOI_ROUND_UP((uintptr_t)work_ptr, MOI_ALIGNMENT);
     encoder = (struct MOIEncoder *)work_ptr;
+    work_ptr += sizeof(struct MOIEncoder);
 
     /* ハンドルの中身を0初期化 */
     memset(encoder, 0, sizeof(struct MOIEncoder));
+
+    /* 符号領域の割当て */
+    for (i = 0; i < MOI_MAX_BEAM_WIDTH; i++) {
+        work_ptr = (uint8_t *)MOI_ROUND_UP((uintptr_t)work_ptr, MOI_ALIGNMENT);
+        encoder->candidate[i].code = (uint8_t *)work_ptr;
+        work_ptr += 2 * config->max_block_size;
+        work_ptr = (uint8_t *)MOI_ROUND_UP((uintptr_t)work_ptr, MOI_ALIGNMENT);
+        encoder->backup[i].code = (uint8_t *)work_ptr;
+        work_ptr += 2 * config->max_block_size;
+    }
+    for (i = 0; i < MOI_MAX_NUM_CHANNELS; i++) {
+        work_ptr = (uint8_t *)MOI_ROUND_UP((uintptr_t)work_ptr, MOI_ALIGNMENT);
+        encoder->best_code[i] = (uint8_t *)work_ptr;
+        work_ptr += 2 * config->max_block_size;
+    }
+
+    /* 最大ブロックサイズの設定 */
+    encoder->max_block_size = config->max_block_size;
 
     /* パラメータは未セット状態に */
     encoder->set_parameter = 0;
 
     /* 自前確保の場合はメモリを記憶しておく */
     encoder->work = alloced_by_malloc ? work : NULL;
+
+    /* バッファオーバーランチェック */
+    MOI_ASSERT((int32_t)(work_ptr - (uint8_t *)work) <= work_size);
 
     return encoder;
 }
@@ -203,234 +249,356 @@ void MOIEncoder_Destroy(struct MOIEncoder *encoder)
     }
 }
 
-/* 1サンプルエンコード */
-static uint8_t MOICoreEncoder_EncodeSample(
-        struct MOICoreEncoder *encoder, int16_t sample)
+/* 量子化した差分を符号語から計算 */
+static int32_t MOICoreEncoder_CalculateQuantizedDiff(
+        const struct MOICoreEncoder *encoder, const uint8_t nibble)
 {
-    uint8_t nibble;
-    int8_t idx;
-    int32_t prev, diff, qdiff, delta, stepsize, diffabs, sign;
+    int32_t qdiff, stepsize;
+    const int32_t delta = nibble & 7;
+    const int32_t sign = nibble & 8;
 
-    assert(encoder != NULL);
-
-    /* 頻繁に参照する変数をオート変数に受ける */
-    prev = encoder->prev_sample;
-    idx = encoder->stepsize_index;
+    MOI_ASSERT(encoder != NULL);
+    MOI_ASSERT(nibble < MOIENCODER_NUM_CODES);
 
     /* ステップサイズの取得 */
-    stepsize = MOI_stepsize_table[idx];
-
-    /* 差分 */
-    diff = sample - prev;
-    sign = diff < 0;
-    diffabs = sign ? -diff : diff;
-
-    /* 差分を符号表現に変換 */
-    /* nibble = sign(diff) * round(|diff| * 4 / stepsize) */
-    nibble = (uint8_t)MOI_MIN_VAL((diffabs << 2) / stepsize, 7);
-    /* nibbleの最上位ビットは符号ビット */
-    if (sign) {
-        nibble |= 0x8;
-    }
+    stepsize = MOI_stepsize_table[encoder->stepsize_index];
 
     /* 量子化した差分を計算 */
-    delta = nibble & 7;
     qdiff = (stepsize * ((delta << 1) + 1)) >> 3;
 
-    /* ここで量子化誤差が出る */
-    /* printf("%d \n", sign ? (-qdiff - diff) : (qdiff - diff)); */
+    /* 符号を適用 */
+    return sign ? -qdiff : qdiff;
+}
 
-    /* 量子化した差分を加える */
-    if (sign) {
-        prev -= qdiff;
-    } else {
-        prev += qdiff;
+/* 符号語のコストを計算 */
+static double MOICoreEncoder_CalculateCost(
+        const struct MOICoreEncoder *encoder, const int16_t sample, const uint8_t nibble)
+{
+    double err;
+    int32_t qdiff;
+
+    MOI_ASSERT(encoder != NULL);
+    MOI_ASSERT(nibble < MOIENCODER_NUM_CODES);
+
+    /* 量子化した差分を計算 */
+    qdiff = MOICoreEncoder_CalculateQuantizedDiff(encoder, nibble);
+
+    /* 量子化した差分により次の値を予測し、真のサンプルとの差をとる */
+    err = encoder->prev_sample + qdiff - sample;
+
+    /* 差の2乗をコストとする */
+    return err * err;
+}
+
+/* エンコーダの状態を更新 */
+static void MOICoreEncoder_Update(
+        struct MOICoreEncoder *encoder, const int16_t sample, const uint8_t nibble)
+{
+    int32_t qdiff;
+
+    MOI_ASSERT(encoder != NULL);
+    MOI_ASSERT(nibble < MOIENCODER_NUM_CODES);
+
+    /* 量子化した差分を計算 */
+    qdiff = MOICoreEncoder_CalculateQuantizedDiff(encoder, nibble);
+
+    /* 合計コストの更新 */
+    encoder->total_cost += MOICoreEncoder_CalculateCost(encoder, sample, nibble);
+
+    /* 直前サンプルの更新 */
+    encoder->prev_sample
+        = (int16_t)MOI_INNER_VAL(encoder->prev_sample + qdiff, INT16_MIN, INT16_MAX);
+
+    /* テーブルインデックスの更新 */
+    encoder->stepsize_index
+        = MOI_INNER_VAL(encoder->stepsize_index + MOI_index_table[nibble], 0, 88);
+}
+
+/* 符号語のコストを計算 */
+static double MOICoreEncoder_EvaluateScore(
+        const struct MOICoreEncoder *encoder, const int16_t *sample, uint32_t depth, const uint8_t nibble)
+{
+    uint8_t abs;
+    double cost, mean;
+    int32_t sign;
+    struct MOICoreEncoder tmp = (*encoder);
+
+    /* 現状態のコスト計算 */
+    cost = MOICoreEncoder_CalculateCost(encoder, sample[0], nibble);
+
+    if (depth == 0) {
+        return cost;
     }
-    prev = MOI_INNER_VAL(prev, -32768, 32767);
 
-    /* インデックス更新 */
-    idx = (int8_t)(idx + MOI_index_table[nibble]);
-    idx = MOI_INNER_VAL(idx, 0, 88);
+    /* 現状態での将来の推定コスト */
+    /* TODO: minとかもあり */
+    MOICoreEncoder_Update(&tmp, sample[0], nibble);
+    sign = (sample[1] - tmp.prev_sample) < 0;
+    mean = 0.0;
+    for (abs = 0; abs <= 7; abs++) {
+        uint8_t nib = sign ? (abs | 8) : abs;
+        mean += MOICoreEncoder_EvaluateScore(&tmp, sample + 1, depth - 1, nib);
+    }
+    mean /= 8;
 
-    /* 計算結果の反映 */
-    encoder->prev_sample = (int16_t)prev;
-    encoder->stepsize_index = idx;
+    return cost + mean;
+}
 
-    return nibble;
+/* 小さい方から数えてk番目の要素を取得（配列は破壊される） */
+static double MOICoreEncoder_SelectTopK(double *data, uint32_t n, uint32_t k)
+{
+    uint32_t i, j, left, right;
+    double x, t;
+
+    left = 0; right = n - 1;
+    while (left < right) {
+        x = data[k];  i = left;  j = right;
+        for ( ; ; ) {
+            while (data[i] < x) { i++; }
+            while (x < data[j]) { j--; }
+            if (i >= j) { break; }
+            t = data[i]; data[i] = data[j];  data[j] = t;
+            i++;  j--;
+        }
+        if (i <= k) { left = j + 1; }
+        if (k <= j) { right = i - 1; }
+    }
+
+    return data[k];
 }
 
 /* モノラルブロックのエンコード */
-static MOIError MOIEncoder_EncodeBlockMono(
-        struct MOICoreEncoder *core_encoder,
-        const int16_t *const *input, uint32_t num_samples,
-        uint8_t *data, uint32_t data_size, uint32_t *output_size)
+static MOIError MOIEncoder_EncodeSamples(
+        struct MOIEncoder *encoder, const struct MOICoreEncoder *init_encoder,
+        const int16_t *input, uint32_t num_samples, uint32_t *best_index)
 {
-    uint8_t u8buf;
-    uint8_t nibble[2];
-    uint32_t smpl;
-    uint8_t *data_pos = data;
+    uint32_t i, smpl, beam_width, depth;
+    double score[MOI_MAX_BEAM_WIDTH * MOIENCODER_NUM_CODES];
+    double score_work[MOI_MAX_BEAM_WIDTH * MOIENCODER_NUM_CODES];
+    struct MOICoreEncoderCandidate *candidate, *backup;
 
     /* 引数チェック */
-    if ((core_encoder == NULL) || (input == NULL)
-            || (data == NULL) || (output_size == NULL)) {
+    if ((encoder == NULL) || (input == NULL) || (best_index == NULL)) {
         return MOI_ERROR_INVALID_ARGUMENT;
     }
 
-    /* 十分なデータサイズがあるか確認 */
-    if (data_size < (num_samples / 2 + 4)) {
-        return MOI_ERROR_INSUFFICIENT_DATA;
-    }
+    candidate = encoder->candidate;
+    backup = encoder->backup;
+    beam_width = encoder->encode_parameter.search_beam_width;
+    depth = encoder->encode_parameter.search_depth;
 
-    /* 先頭サンプルをエンコーダにセット */
-    core_encoder->prev_sample = input[0][0];
+    MOI_ASSERT((beam_width > 0) && (beam_width <= MOI_MAX_BEAM_WIDTH));
+    MOI_ASSERT(depth <= MOI_MAX_DEPTH);
 
-    /* ブロックヘッダエンコード */
-    ByteArray_PutUint16LE(data_pos, core_encoder->prev_sample);
-    ByteArray_PutUint8(data_pos, core_encoder->stepsize_index);
-    ByteArray_PutUint8(data_pos, 0); /* reserved */
-
-    /* ブロックデータエンコード */
-    for (smpl = 1; smpl < num_samples; smpl += 2) {
-        assert((uint32_t)(data_pos - data) < data_size);
-        nibble[0] = MOICoreEncoder_EncodeSample(core_encoder, input[0][smpl + 0]);
-        nibble[1] = MOICoreEncoder_EncodeSample(core_encoder, input[0][smpl + 1]);
-        assert((nibble[0] <= 0xF) && (nibble[1] <= 0xF));
-        u8buf = (uint8_t)((nibble[0] << 0) | (nibble[1] << 4));
-        ByteArray_PutUint8(data_pos, u8buf);
-    }
-
-    /* 書き出しサイズをセット */
-    (*output_size) = (uint32_t)(data_pos - data);
-    return MOI_ERROR_OK;
-}
-
-/* ステレオブロックのエンコード */
-static MOIError MOIEncoder_EncodeBlockStereo(
-        struct MOICoreEncoder *core_encoder,
-        const int16_t *const *input, uint32_t num_samples,
-        uint8_t *data, uint32_t data_size, uint32_t *output_size)
-{
-    uint32_t u32buf;
-    uint8_t nibble[8];
-    uint32_t ch, smpl;
-    uint8_t *data_pos = data;
-
-    /* 引数チェック */
-    if ((core_encoder == NULL) || (input == NULL)
-            || (data == NULL) || (output_size == NULL)) {
-        return MOI_ERROR_INVALID_ARGUMENT;
-    }
-
-    /* 十分なデータサイズがあるか確認 */
-    if (data_size < (num_samples + 4)) {
-        return MOI_ERROR_INSUFFICIENT_DATA;
-    }
-
-    /* 先頭サンプルをエンコーダにセット */
-    for (ch = 0; ch < 2; ch++) {
-        core_encoder[ch].prev_sample = input[ch][0];
-    }
-
-    /* ブロックヘッダエンコード */
-    for (ch = 0; ch < 2; ch++) {
-        ByteArray_PutUint16LE(data_pos, core_encoder[ch].prev_sample);
-        ByteArray_PutUint8(data_pos, core_encoder[ch].stepsize_index);
-        ByteArray_PutUint8(data_pos, 0); /* reserved */
+    /* 初期化 */
+    for (i = 0; i < beam_width; i++) {
+        candidate[i].encoder = (*init_encoder);
     }
 
     /* ブロックデータエンコード */
-    for (smpl = 1; smpl < num_samples; smpl += 8) {
-        for (ch = 0; ch < 2; ch++) {
-            assert((uint32_t)(data_pos - data) < data_size);
-            nibble[0] = MOICoreEncoder_EncodeSample(&(core_encoder[ch]), input[ch][smpl + 0]);
-            nibble[1] = MOICoreEncoder_EncodeSample(&(core_encoder[ch]), input[ch][smpl + 1]);
-            nibble[2] = MOICoreEncoder_EncodeSample(&(core_encoder[ch]), input[ch][smpl + 2]);
-            nibble[3] = MOICoreEncoder_EncodeSample(&(core_encoder[ch]), input[ch][smpl + 3]);
-            nibble[4] = MOICoreEncoder_EncodeSample(&(core_encoder[ch]), input[ch][smpl + 4]);
-            nibble[5] = MOICoreEncoder_EncodeSample(&(core_encoder[ch]), input[ch][smpl + 5]);
-            nibble[6] = MOICoreEncoder_EncodeSample(&(core_encoder[ch]), input[ch][smpl + 6]);
-            nibble[7] = MOICoreEncoder_EncodeSample(&(core_encoder[ch]), input[ch][smpl + 7]);
-            assert((nibble[0] <= 0xF) && (nibble[1] <= 0xF) && (nibble[2] <= 0xF) && (nibble[3] <= 0xF)
-                    && (nibble[4] <= 0xF) && (nibble[5] <= 0xF) && (nibble[6] <= 0xF) && (nibble[7] <= 0xF));
-            u32buf  = (uint32_t)(nibble[0] <<  0);
-            u32buf |= (uint32_t)(nibble[1] <<  4);
-            u32buf |= (uint32_t)(nibble[2] <<  8);
-            u32buf |= (uint32_t)(nibble[3] << 12);
-            u32buf |= (uint32_t)(nibble[4] << 16);
-            u32buf |= (uint32_t)(nibble[5] << 20);
-            u32buf |= (uint32_t)(nibble[6] << 24);
-            u32buf |= (uint32_t)(nibble[7] << 28);
-            ByteArray_PutUint32LE(data_pos, u32buf);
+    for (smpl = 1; smpl < num_samples; smpl++) {
+        double threshold;
+        uint8_t nibble;
+        uint32_t j;
+
+        /* コスト計算 */
+        for (i = 0; i < beam_width; i++) {
+            const struct MOICoreEncoder *core = &(candidate[i].encoder);
+            uint8_t abs;
+            const int32_t sign = (input[smpl] - core->prev_sample) < 0;
+            const uint32_t init_depth = MOI_MIN_VAL(depth, num_samples - smpl - 1);
+            for (abs = 0; abs <= 7; abs++) {
+                /* 同一符号の中でコスト計算 */
+                nibble = sign ? (abs | 0x8) : abs;
+                score[(i * MOIENCODER_NUM_CODES) + nibble]
+                    = core->total_cost + MOICoreEncoder_EvaluateScore(core, &input[smpl], init_depth, nibble);
+                /* 異なる符号は計算しない（大きなコストを与える） */
+                nibble ^= 0x8;
+                score[(i * MOIENCODER_NUM_CODES) + nibble] = FLT_MAX;
+            }
         }
+
+        /* 初期段階では全員同一状態なので、先頭要素以外は評価しない */
+        if (smpl == 1) {
+            for (i = MOIENCODER_NUM_CODES; i < MOIENCODER_NUM_CODES * beam_width; i++) {
+                score[i] = score_work[i] = FLT_MAX;
+            }
+        }
+
+        /* 上位選択の閾値 */
+        memcpy(score_work, score, sizeof(double) * beam_width * MOIENCODER_NUM_CODES);
+        threshold = MOICoreEncoder_SelectTopK(score_work, beam_width * MOIENCODER_NUM_CODES, beam_width);
+        /* 最大値が小さい場合の対策 */
+        if (threshold < FLT_MIN) {
+            threshold = FLT_MIN;
+        }
+
+        /* 上位選択 */
+        /* 符号列（状態遷移記録）と候補エンコーダのバックアップ */
+        for (i = 0; i < beam_width; i++) {
+            memcpy(backup[i].code, candidate[i].code, sizeof(uint8_t) * smpl);
+            backup[i].encoder = candidate[i].encoder;
+        }
+        /* 閾値未満のコストを持つエンコーダを次の候補に選択 */
+        j = 0;
+        for (i = 0; i < beam_width; i++) {
+            for (nibble = 0; nibble <= 0xF; nibble++) {
+                if (score[(i * MOIENCODER_NUM_CODES) + nibble] <= threshold) {
+                    struct MOICoreEncoder entry = backup[i].encoder;
+                    MOICoreEncoder_Update(&entry, input[smpl], nibble);
+                    candidate[j].encoder = entry;
+                    memcpy(candidate[j].code, backup[i].code, sizeof(uint8_t) * smpl);
+                    candidate[j].code[smpl] = nibble;
+                    j++;
+                    if (j == beam_width) {
+                        goto END;
+                    }
+                }
+            }
+        }
+END: 
+        MOI_ASSERT(j == beam_width);
     }
 
-    /* 書き出しサイズをセット */
-    (*output_size) = (uint32_t)(data_pos - data);
+    /* 最小コストのインデックス探索 */
+    {
+        double min = FLT_MAX;
+        uint32_t tmp_best;
+        for (i = 0; i < beam_width; i++) {
+            if (min > candidate[i].encoder.total_cost) {
+                min = candidate[i].encoder.total_cost;
+                tmp_best = i;
+            }
+        }
+        (*best_index) = tmp_best;
+    }
+
     return MOI_ERROR_OK;
 }
 
 /* 単一データブロックエンコード */
+/* デコードとは違いstaticに縛る: エンコーダが内部的に状態を持ち、連続でEncodeBlockを呼ぶ必要があるから */
 static MOIApiResult MOIEncoder_EncodeBlock(
         struct MOIEncoder *encoder,
         const int16_t *const *input, uint32_t num_samples, 
         uint8_t *data, uint32_t data_size, uint32_t *output_size)
 {
     MOIError err;
-    const struct MOIEncodeParameter *enc_param;
+    uint32_t ch, smpl;
+    uint8_t *data_pos;
+    const struct MOIEncodeParameter *parameter;
 
     /* 引数チェック */
     if ((encoder == NULL) || (data == NULL)
             || (input == NULL) || (output_size == NULL)) {
         return MOI_APIRESULT_INVALID_ARGUMENT;
     }
-    enc_param = &(encoder->encode_paramemter);
+    parameter = &(encoder->encode_parameter);
 
-    /* ブロックデコード */
-    switch (enc_param->num_channels) {
+    /* 十分なデータサイズがあるか確認 */
+    if (data_size < ((num_samples * parameter->num_channels) / 2 + 4)) {
+        return MOI_APIRESULT_INSUFFICIENT_DATA;
+    }
+    data_pos = data;
+
+    /* ブロックヘッダエンコード */
+    for (ch = 0; ch < parameter->num_channels; ch++) {
+        ByteArray_PutUint16LE(data_pos, input[ch][0]);
+        ByteArray_PutUint8(data_pos, encoder->core_encoder[ch].stepsize_index);
+        ByteArray_PutUint8(data_pos, 0); /* reserved */
+    }
+
+    /* 最前符号列の探索 */
+    for (ch = 0; ch < parameter->num_channels; ch++) {
+        uint32_t best_index;
+        encoder->core_encoder[ch].prev_sample = input[ch][0];
+        encoder->core_encoder[ch].total_cost = 0.0;
+        if ((err = MOIEncoder_EncodeSamples(encoder,
+                        &encoder->core_encoder[ch], input[ch], num_samples, &best_index)) != MOI_ERROR_OK) {
+            /* エラーハンドル */
+            switch (err) {
+            case MOI_ERROR_INVALID_ARGUMENT:
+                return MOI_APIRESULT_INVALID_ARGUMENT;
+            case MOI_ERROR_INVALID_FORMAT:
+                return MOI_APIRESULT_INVALID_FORMAT;
+            case MOI_ERROR_INSUFFICIENT_BUFFER:
+                return MOI_APIRESULT_INSUFFICIENT_BUFFER;
+            default:
+                return MOI_APIRESULT_NG;
+            }
+        }
+        /* 最善の符号列とエンコーダを取得 */
+        memcpy(encoder->best_code[ch], encoder->candidate[best_index].code, sizeof(uint8_t) * num_samples);
+        encoder->core_encoder[ch] = encoder->candidate[best_index].encoder;
+    }
+
+    /* ブロックデータエンコード */
+    switch (parameter->num_channels) {
     case 1:
-        err = MOIEncoder_EncodeBlockMono(encoder->core_encoder, 
-                input, num_samples, data, data_size, output_size);
+        for (smpl = 1; smpl < num_samples; smpl += 2) {
+            uint8_t nibble[2];
+            uint8_t u8buf;
+            nibble[0] = encoder->best_code[0][smpl + 0];
+            nibble[1] = encoder->best_code[0][smpl + 1];
+            MOI_ASSERT((uint32_t)(data_pos - data) < data_size);
+            MOI_ASSERT((nibble[0] <= 0xF) && (nibble[1] <= 0xF));
+            u8buf = (uint8_t)((nibble[0] << 0) | (nibble[1] << 4));
+            ByteArray_PutUint8(data_pos, u8buf);
+        }
         break;
     case 2:
-        err = MOIEncoder_EncodeBlockStereo(encoder->core_encoder, 
-                input, num_samples, data, data_size, output_size);
+        for (smpl = 1; smpl < num_samples; smpl += 8) {
+            for (ch = 0; ch < 2; ch++) {
+                uint8_t nibble[8];
+                uint32_t u32buf;
+                MOI_ASSERT((uint32_t)(data_pos - data) < data_size);
+                nibble[0] = encoder->best_code[ch][smpl + 0];
+                nibble[1] = encoder->best_code[ch][smpl + 1];
+                nibble[2] = encoder->best_code[ch][smpl + 2];
+                nibble[3] = encoder->best_code[ch][smpl + 3];
+                nibble[4] = encoder->best_code[ch][smpl + 4];
+                nibble[5] = encoder->best_code[ch][smpl + 5];
+                nibble[6] = encoder->best_code[ch][smpl + 6];
+                nibble[7] = encoder->best_code[ch][smpl + 7];
+                MOI_ASSERT((nibble[0] <= 0xF) && (nibble[1] <= 0xF) && (nibble[2] <= 0xF) && (nibble[3] <= 0xF)
+                        && (nibble[4] <= 0xF) && (nibble[5] <= 0xF) && (nibble[6] <= 0xF) && (nibble[7] <= 0xF));
+                u32buf  = (uint32_t)(nibble[0] <<  0);
+                u32buf |= (uint32_t)(nibble[1] <<  4);
+                u32buf |= (uint32_t)(nibble[2] <<  8);
+                u32buf |= (uint32_t)(nibble[3] << 12);
+                u32buf |= (uint32_t)(nibble[4] << 16);
+                u32buf |= (uint32_t)(nibble[5] << 20);
+                u32buf |= (uint32_t)(nibble[6] << 24);
+                u32buf |= (uint32_t)(nibble[7] << 28);
+                ByteArray_PutUint32LE(data_pos, u32buf);
+            }
+        }
         break;
     default:
-        return MOI_APIRESULT_INVALID_FORMAT;
+        MOI_ASSERT(0);
     }
 
-    /* デコード時のエラーハンドル */
-    if (err != MOI_ERROR_OK) {
-        switch (err) {
-        case MOI_ERROR_INVALID_ARGUMENT:
-            return MOI_APIRESULT_INVALID_ARGUMENT;
-        case MOI_ERROR_INVALID_FORMAT:
-            return MOI_APIRESULT_INVALID_FORMAT;
-        case MOI_ERROR_INSUFFICIENT_BUFFER:
-            return MOI_APIRESULT_INSUFFICIENT_BUFFER;
-        default:
-            return MOI_APIRESULT_NG;
-        }
-    }
+    /* 書き出しサイズをセット */
+    (*output_size) = (uint32_t)(data_pos - data);
 
     return MOI_APIRESULT_OK;
 }
 
 /* エンコードパラメータをヘッダに変換 */
 static MOIError MOIEncoder_ConvertParameterToHeader(
-        const struct MOIEncodeParameter *enc_param, uint32_t num_samples,
+        const struct MOIEncodeParameter *parameter, uint32_t num_samples,
         struct IMAADPCMWAVHeader *header)
 {
     uint32_t block_data_size;
     struct IMAADPCMWAVHeader tmp_header = {0, };
 
     /* 引数チェック */
-    if ((enc_param == NULL) || (header == NULL)) {
+    if ((parameter == NULL) || (header == NULL)) {
         return MOI_ERROR_INVALID_ARGUMENT;
     }
 
     /* サンプルあたりビット数は4固定 */
-    if (enc_param->bits_per_sample != MOI_BITS_PER_SAMPLE) {
+    if (parameter->bits_per_sample != MOI_BITS_PER_SAMPLE) {
         return MOI_ERROR_INVALID_FORMAT;
     }
 
@@ -440,26 +608,26 @@ static MOIError MOIEncoder_ConvertParameterToHeader(
     tmp_header.num_samples = num_samples;
 
     /* そのままヘッダに入れられるメンバ */
-    tmp_header.num_channels = enc_param->num_channels;
-    tmp_header.sampling_rate = enc_param->sampling_rate;
-    tmp_header.bits_per_sample = enc_param->bits_per_sample;
-    tmp_header.block_size = enc_param->block_size;
+    tmp_header.num_channels = parameter->num_channels;
+    tmp_header.sampling_rate = parameter->sampling_rate;
+    tmp_header.bits_per_sample = parameter->bits_per_sample;
+    tmp_header.block_size = parameter->block_size;
 
     /* 計算が必要なメンバ */
-    if (enc_param->block_size <= enc_param->num_channels * 4) {
+    if (parameter->block_size <= parameter->num_channels * 4) {
         /* データを入れる領域がない */
         return MOI_ERROR_INVALID_FORMAT;
     }
     /* 4はチャンネルあたりのヘッダ領域サイズ */
-    assert(enc_param->block_size >= (enc_param->num_channels * 4));
-    block_data_size = (uint32_t)(enc_param->block_size - (enc_param->num_channels * 4));
-    assert((block_data_size * 8) % (uint32_t)(enc_param->bits_per_sample * enc_param->num_channels) == 0);
-    assert((enc_param->bits_per_sample * enc_param->num_channels) != 0);
-    tmp_header.num_samples_per_block = (uint16_t)((block_data_size * 8) / (uint32_t)(enc_param->bits_per_sample * enc_param->num_channels));
+    MOI_ASSERT(parameter->block_size >= (parameter->num_channels * 4));
+    block_data_size = (uint32_t)(parameter->block_size - (parameter->num_channels * 4));
+    MOI_ASSERT((block_data_size * 8) % (uint32_t)(parameter->bits_per_sample * parameter->num_channels) == 0);
+    MOI_ASSERT((parameter->bits_per_sample * parameter->num_channels) != 0);
+    tmp_header.num_samples_per_block = (uint16_t)((block_data_size * 8) / (uint32_t)(parameter->bits_per_sample * parameter->num_channels));
     /* ヘッダに入っている分+1 */
     tmp_header.num_samples_per_block++;
-    assert(tmp_header.num_samples_per_block != 0);
-    tmp_header.bytes_per_sec = (enc_param->block_size * enc_param->sampling_rate) / tmp_header.num_samples_per_block;
+    MOI_ASSERT(tmp_header.num_samples_per_block != 0);
+    tmp_header.bytes_per_sec = (parameter->block_size * parameter->sampling_rate) / tmp_header.num_samples_per_block;
 
     /* 成功終了 */
     (*header) = tmp_header;
@@ -478,6 +646,11 @@ MOIApiResult MOIEncoder_SetEncodeParameter(
         return MOI_APIRESULT_INVALID_ARGUMENT;
     }
 
+    /* ブロックサイズが大きすぎる */
+    if (encoder->max_block_size < parameter->block_size) {
+        return MOI_APIRESULT_INVALID_FORMAT;
+    }
+
     /* パラメータ設定がおかしくないか、ヘッダへの変換を通じて確認 */
     /* 総サンプル数はダミー値を入れる */
     if (MOIEncoder_ConvertParameterToHeader(parameter, 0, &tmp_header) != MOI_ERROR_OK) {
@@ -485,7 +658,7 @@ MOIApiResult MOIEncoder_SetEncodeParameter(
     }
 
     /* パラメータ設定 */
-    encoder->encode_paramemter = (*parameter);
+    encoder->encode_parameter = (*parameter);
 
     /* パラメータ設定済みフラグを立てる */
     encoder->set_parameter = 1;
@@ -520,7 +693,7 @@ MOIApiResult MOIEncoder_EncodeWhole(
     data_pos = data;
 
     /* エンコードパラメータをヘッダに変換 */
-    if (MOIEncoder_ConvertParameterToHeader(&(encoder->encode_paramemter), num_samples, &header) != MOI_ERROR_OK) {
+    if (MOIEncoder_ConvertParameterToHeader(&(encoder->encode_parameter), num_samples, &header) != MOI_ERROR_OK) {
         return MOI_APIRESULT_INVALID_FORMAT;
     }
 
@@ -552,8 +725,8 @@ MOIApiResult MOIEncoder_EncodeWhole(
         data_pos      += write_size;
         write_offset  += write_size;
         progress      += num_encode_samples;
-        assert(write_size <= header.block_size);
-        assert(write_offset <= data_size);
+        MOI_ASSERT(write_size <= header.block_size);
+        MOI_ASSERT(write_offset <= data_size);
     }
 
     /* 成功終了 */

@@ -22,6 +22,10 @@ static struct CommandLineParserSpecification command_line_spec[] = {
         COMMAND_LINE_PARSER_FALSE, NULL, COMMAND_LINE_PARSER_FALSE },
     { 'v', "version", "Show version information",
         COMMAND_LINE_PARSER_FALSE, NULL, COMMAND_LINE_PARSER_FALSE },
+    { 'B', "search-beam-width", "Specify seach beam width in encoding (default:2)",
+        COMMAND_LINE_PARSER_TRUE, "2", COMMAND_LINE_PARSER_FALSE },
+    { 'D', "search-depth", "Specify seach depth in encoding (default:2)",
+        COMMAND_LINE_PARSER_TRUE, "2", COMMAND_LINE_PARSER_FALSE },
     { 0, NULL,  }
 };
 
@@ -106,7 +110,7 @@ static int do_decode(const char *adpcm_filename, const char *decoded_filename)
 }
 
 /* エンコード処理 */
-static int do_encode(const char *wav_file, const char *encoded_filename)
+static int do_encode(const char *wav_file, const char *encoded_filename, uint32_t search_beam_width, uint32_t search_depth)
 {
     FILE *fp;
     struct WAVFile *wavfile;
@@ -117,6 +121,7 @@ static int do_encode(const char *wav_file, const char *encoded_filename)
     uint8_t *buffer;
     struct MOIEncodeParameter enc_param;
     struct MOIEncoder *encoder;
+    struct MOIEncoderConfig config;
     MOIApiResult api_result;
 
     /* 入力wav取得 */
@@ -146,13 +151,16 @@ static int do_encode(const char *wav_file, const char *encoded_filename)
     }
 
     /* ハンドル作成 */
-    encoder = MOIEncoder_Create(NULL, 0);
+    config.max_block_size = MOICUI_BLOCK_SIZE;
+    encoder = MOIEncoder_Create(&config, NULL, 0);
 
     /* エンコードパラメータをセット */
     enc_param.num_channels = (uint16_t)num_channels;
     enc_param.sampling_rate = wavfile->format.sampling_rate;
     enc_param.bits_per_sample = MOI_BITS_PER_SAMPLE;
     enc_param.block_size = MOICUI_BLOCK_SIZE;
+    enc_param.search_beam_width = search_beam_width;
+    enc_param.search_depth = search_depth;
     if ((api_result = MOIEncoder_SetEncodeParameter(encoder, &enc_param))
             != MOI_APIRESULT_OK) {
         fprintf(stderr, "Failed to set encode parameter. API result:%d \n", api_result);
@@ -202,6 +210,7 @@ static int do_residual_output(const char *wav_file, const char *residual_filenam
     struct MOIEncodeParameter enc_param;
     struct MOIEncoder *encoder;
     struct MOIDecoder *decoder;
+    struct MOIEncoderConfig enc_config;
     MOIApiResult api_result;
 
     /* 入力wav取得 */
@@ -231,7 +240,8 @@ static int do_residual_output(const char *wav_file, const char *residual_filenam
     }
 
     /* ハンドル作成 */
-    encoder = MOIEncoder_Create(NULL, 0);
+    enc_config.max_block_size = MOICUI_BLOCK_SIZE;
+    encoder = MOIEncoder_Create(&enc_config, NULL, 0);
     decoder = MOIDecoder_Create(NULL, 0);
 
     /* エンコードパラメータをセット */
@@ -295,12 +305,29 @@ static void print_version_info(void)
     printf("MOI -- My Optimized IMA-ADPCM encoder Version.%d \n", MOI_VERSION);
 }
 
+/* 数値オプションを取得 */
+static int32_t check_get_numerical_option(char **argv, const char *option, uint32_t *result)
+{
+    char *e;
+    uint32_t tmp;
+    const char *lstr = CommandLineParser_GetArgumentString(command_line_spec, option);
+
+    tmp = (uint8_t)strtol(lstr, &e, 10);
+    if (*e != '\0') {
+        fprintf(stderr, "%s: invalid %s. (irregular character found in %s at %s)\n", argv[0], option, lstr, e);
+        return 1;
+    }
+
+    (*result) = tmp;
+    return 0;
+}
+
 /* メインエントリ */
 int main(int argc, char **argv)
 {
-    const char* filename_ptr[2] = { NULL, NULL };
-    const char* input_file;
-    const char* output_file;
+    const char *filename_ptr[2] = { NULL, NULL };
+    const char *input_file;
+    const char *output_file;
 
     /* 引数が足らない */
     if (argc == 1) {
@@ -312,7 +339,7 @@ int main(int argc, char **argv)
 
     /* コマンドライン解析 */
     if (CommandLineParser_ParseArguments(command_line_spec,
-                argc, (const char* const*)argv, filename_ptr, sizeof(filename_ptr) / sizeof(filename_ptr[0]))
+                argc, (const char* const *)argv, filename_ptr, sizeof(filename_ptr) / sizeof(filename_ptr[0]))
             != COMMAND_LINE_PARSER_RESULT_OK) {
         return 1;
     }
@@ -354,8 +381,24 @@ int main(int argc, char **argv)
             return 1;
         }
     } else if (CommandLineParser_GetOptionAcquired(command_line_spec, "encode") == COMMAND_LINE_PARSER_TRUE) {
+        uint32_t search_beam_width, search_depth;
+        /* 探索ビーム幅と探索深さを取得 */
+        if (check_get_numerical_option(argv, "search-beam-width", &search_beam_width) != 0) {
+            return 1;
+        }
+        if (check_get_numerical_option(argv, "search-depth", &search_depth) != 0) {
+            return 1;
+        }
+        if ((search_beam_width == 0) || (search_beam_width > MOI_MAX_BEAM_WIDTH)) {
+            fprintf(stderr, "%s: search beam width is out of range. \n", argv[0]);
+            return 1;
+        }
+        if (search_depth > MOI_MAX_DEPTH) {
+            fprintf(stderr, "%s: search depth is out of range. \n", argv[0]);
+            return 1;
+        }
         /* 一括エンコード実行 */
-        if (do_encode(input_file, output_file) != 0) {
+        if (do_encode(input_file, output_file, search_beam_width, search_depth) != 0) {
             fprintf(stderr, "%s: failed to encode %s. \n", argv[0], input_file);
             return 1;
         }

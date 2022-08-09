@@ -12,8 +12,14 @@ extern "C" {
 #include "../../libs/moicodec/src/moi_decoder.c"
 }
 
+/* 有効なエンコーダコンフィグをセット */
+#define MOI_SetValidEncoderConfig(p_config) {\
+    struct MOIEncoderConfig *p__config = p_config;\
+    p__config->max_block_size = 256;\
+}
+
 /* 有効なヘッダをセット */
-#define IMAADPCM_SetValidHeader(p_header) {\
+#define MOI_SetValidHeader(p_header) {\
     struct IMAADPCMWAVHeader *header__p = p_header;\
     header__p->num_channels = 1;\
     header__p->sampling_rate = 44100;\
@@ -25,14 +31,15 @@ extern "C" {
     header__p->header_size = MOIENCODER_HEADER_SIZE;\
 }
 
-
 /* 有効なパラメータをセット */
-#define IMAADPCM_SetValidParameter(p_param) {\
+#define MOI_SetValidParameter(p_param) {\
     struct MOIEncodeParameter *p__param = p_param;\
     p__param->num_channels = 1;\
     p__param->sampling_rate = 8000;\
     p__param->bits_per_sample = MOI_BITS_PER_SAMPLE;\
     p__param->block_size = 256;\
+    p__param->search_beam_width = 2;\
+    p__param->search_depth = 2;\
 }
 
 /* ヘッダエンコードデコードテスト */
@@ -43,7 +50,7 @@ TEST(IMAADPCMTest, HeaderEncodeDecodeTest)
         uint8_t data[MOIENCODER_HEADER_SIZE] = { 0, };
         struct IMAADPCMWAVHeader header = { 0, }, tmp_header = { 0, };
 
-        IMAADPCM_SetValidHeader(&header);
+        MOI_SetValidHeader(&header);
 
         /* エンコード->デコード */
         EXPECT_EQ(MOI_APIRESULT_OK, MOIEncoder_EncodeHeader(&header, data, sizeof(data)));
@@ -66,22 +73,22 @@ TEST(IMAADPCMTest, HeaderEncodeDecodeTest)
         uint8_t data[MOIENCODER_HEADER_SIZE] = { 0, };
 
         /* 引数が不正 */
-        IMAADPCM_SetValidHeader(&header);
+        MOI_SetValidHeader(&header);
         EXPECT_EQ(MOI_APIRESULT_INVALID_ARGUMENT, MOIEncoder_EncodeHeader(NULL, data, sizeof(data)));
         EXPECT_EQ(MOI_APIRESULT_INVALID_ARGUMENT, MOIEncoder_EncodeHeader(&header, NULL, sizeof(data)));
 
         /* データサイズ不足 */
-        IMAADPCM_SetValidHeader(&header);
+        MOI_SetValidHeader(&header);
         EXPECT_EQ(MOI_APIRESULT_INSUFFICIENT_DATA, MOIEncoder_EncodeHeader(&header, data, sizeof(data) - 1));
         EXPECT_EQ(MOI_APIRESULT_INSUFFICIENT_DATA, MOIEncoder_EncodeHeader(&header, data, MOIENCODER_HEADER_SIZE - 1));
 
         /* チャンネル数異常 */
-        IMAADPCM_SetValidHeader(&header);
+        MOI_SetValidHeader(&header);
         header.num_channels = 3;
         EXPECT_EQ(MOI_APIRESULT_INVALID_FORMAT, MOIEncoder_EncodeHeader(&header, data, sizeof(data)));
 
         /* ビット深度異常 */
-        IMAADPCM_SetValidHeader(&header);
+        MOI_SetValidHeader(&header);
         header.bits_per_sample = 2;
         EXPECT_EQ(MOI_APIRESULT_INVALID_FORMAT, MOIEncoder_EncodeHeader(&header, data, sizeof(data)));
     }
@@ -93,7 +100,7 @@ TEST(IMAADPCMTest, HeaderEncodeDecodeTest)
         uint8_t data[MOIENCODER_HEADER_SIZE];
 
         /* 有効な内容を作っておく */
-        IMAADPCM_SetValidHeader(&header);
+        MOI_SetValidHeader(&header);
         MOIEncoder_EncodeHeader(&header, valid_data, sizeof(valid_data));
 
         /* チャンクIDが不正 */
@@ -362,9 +369,16 @@ TEST(MOIEncoder, CreateDestroyTest)
     /* ワークサイズ計算テスト */
     {
         int32_t work_size;
+        struct MOIEncoderConfig config;
 
-        work_size = MOIEncoder_CalculateWorkSize();
+        MOI_SetValidEncoderConfig(&config);
+        work_size = MOIEncoder_CalculateWorkSize(&config);
         EXPECT_TRUE(work_size >= (int32_t)sizeof(struct MOIEncoder));
+        
+        MOI_SetValidEncoderConfig(&config);
+        config.max_block_size = 0;
+        work_size = MOIEncoder_CalculateWorkSize(&config);
+        EXPECT_TRUE(work_size < 0);
     }
 
     /* ワーク領域渡しによるハンドル作成（成功例） */
@@ -372,14 +386,17 @@ TEST(MOIEncoder, CreateDestroyTest)
         void *work;
         int32_t work_size;
         struct MOIEncoder *encoder;
+        struct MOIEncoderConfig config;
 
-        work_size = MOIEncoder_CalculateWorkSize();
+        MOI_SetValidEncoderConfig(&config);
+        work_size = MOIEncoder_CalculateWorkSize(&config);
         work = malloc(work_size);
 
-        encoder = MOIEncoder_Create(work, work_size);
+        encoder = MOIEncoder_Create(&config, work, work_size);
         EXPECT_TRUE(encoder != NULL);
         EXPECT_TRUE(encoder->work == NULL);
-        EXPECT_TRUE(encoder->set_parameter == 0);
+        EXPECT_EQ(0, encoder->set_parameter);
+        EXPECT_EQ(config.max_block_size, encoder->max_block_size);
 
         MOIEncoder_Destroy(encoder);
         free(work);
@@ -388,10 +405,14 @@ TEST(MOIEncoder, CreateDestroyTest)
     /* 自前確保によるハンドル作成（成功例） */
     {
         struct MOIEncoder *encoder;
+        struct MOIEncoderConfig config;
 
-        encoder = MOIEncoder_Create(NULL, 0);
+        MOI_SetValidEncoderConfig(&config);
+        encoder = MOIEncoder_Create(&config, NULL, 0);
         EXPECT_TRUE(encoder != NULL);
         EXPECT_TRUE(encoder->work != NULL);
+        EXPECT_EQ(0, encoder->set_parameter);
+        EXPECT_EQ(config.max_block_size, encoder->max_block_size);
 
         MOIEncoder_Destroy(encoder);
     }
@@ -401,21 +422,44 @@ TEST(MOIEncoder, CreateDestroyTest)
         void *work;
         int32_t work_size;
         struct MOIEncoder *encoder;
+        struct MOIEncoderConfig config;
 
-        work_size = MOIEncoder_CalculateWorkSize();
+        MOI_SetValidEncoderConfig(&config);
+        work_size = MOIEncoder_CalculateWorkSize(&config);
         work = malloc(work_size);
 
         /* 引数が不正 */
-        encoder = MOIEncoder_Create(NULL, work_size);
+        encoder = MOIEncoder_Create(NULL, work, work_size);
         EXPECT_TRUE(encoder == NULL);
-        encoder = MOIEncoder_Create(work, 0);
+        encoder = MOIEncoder_Create(&config, NULL, work_size);
+        EXPECT_TRUE(encoder == NULL);
+        encoder = MOIEncoder_Create(&config, work, 0);
         EXPECT_TRUE(encoder == NULL);
 
         /* ワークサイズ不足 */
-        encoder = MOIEncoder_Create(work, work_size - 1);
+        encoder = MOIEncoder_Create(&config, work, work_size - 1);
+        EXPECT_TRUE(encoder == NULL);
+
+        /* コンフィグ不正 */
+        MOI_SetValidEncoderConfig(&config);
+        config.max_block_size = 0;
+        encoder = MOIEncoder_Create(&config, work, work_size);
         EXPECT_TRUE(encoder == NULL);
 
         free(work);
+    }
+
+    /* 自前確保によるハンドル作成（失敗ケース） */
+    {
+        struct MOIEncoder *encoder;
+        struct MOIEncoderConfig config;
+
+        MOI_SetValidEncoderConfig(&config);
+        config.max_block_size = 0;
+        encoder = MOIEncoder_Create(&config, NULL, 0);
+        EXPECT_TRUE(encoder == NULL);
+
+        MOIEncoder_Destroy(encoder);
     }
 }
 
@@ -425,14 +469,16 @@ TEST(MOIEncoder, SetEncodeParameterTest)
     /* 成功例 */
     {
         struct MOIEncoder *encoder;
+        struct MOIEncoderConfig config;
         struct MOIEncodeParameter param;
 
-        encoder = MOIEncoder_Create(NULL, 0);
+        MOI_SetValidEncoderConfig(&config);
+        encoder = MOIEncoder_Create(&config, NULL, 0);
 
-        IMAADPCM_SetValidParameter(&param);
+        MOI_SetValidParameter(&param);
         EXPECT_EQ(MOI_APIRESULT_OK, MOIEncoder_SetEncodeParameter(encoder, &param));
         EXPECT_EQ(1, encoder->set_parameter);
-        EXPECT_EQ(0, memcmp(&(encoder->encode_paramemter), &param, sizeof(struct MOIEncodeParameter)));
+        EXPECT_EQ(0, memcmp(&(encoder->encode_parameter), &param, sizeof(struct MOIEncodeParameter)));
 
         MOIEncoder_Destroy(encoder);
     }
@@ -440,25 +486,27 @@ TEST(MOIEncoder, SetEncodeParameterTest)
     /* 失敗ケース */
     {
         struct MOIEncoder *encoder;
+        struct MOIEncoderConfig config;
         struct MOIEncodeParameter param;
 
-        encoder = MOIEncoder_Create(NULL, 0);
+        MOI_SetValidEncoderConfig(&config);
+        encoder = MOIEncoder_Create(&config, NULL, 0);
 
         /* 引数が不正 */
-        IMAADPCM_SetValidParameter(&param);
+        MOI_SetValidParameter(&param);
         EXPECT_EQ(MOI_APIRESULT_INVALID_ARGUMENT, MOIEncoder_SetEncodeParameter(NULL,  &param));
         EXPECT_EQ(MOI_APIRESULT_INVALID_ARGUMENT, MOIEncoder_SetEncodeParameter(encoder, NULL));
 
         /* サンプルあたりビット数が異常 */
-        IMAADPCM_SetValidParameter(&param);
+        MOI_SetValidParameter(&param);
         param.bits_per_sample = 0;
         EXPECT_EQ(MOI_APIRESULT_INVALID_FORMAT, MOIEncoder_SetEncodeParameter(encoder, &param));
 
         /* ブロックサイズが小さすぎる */
-        IMAADPCM_SetValidParameter(&param);
+        MOI_SetValidParameter(&param);
         param.block_size = 0;
         EXPECT_EQ(MOI_APIRESULT_INVALID_FORMAT, MOIEncoder_SetEncodeParameter(encoder, &param));
-        IMAADPCM_SetValidParameter(&param);
+        MOI_SetValidParameter(&param);
         param.block_size = param.num_channels * 4;
         EXPECT_EQ(MOI_APIRESULT_INVALID_FORMAT, MOIEncoder_SetEncodeParameter(encoder, &param));
 
@@ -480,6 +528,7 @@ static uint8_t MOIEncoderTest_EncodeDecodeTest(
     uint8_t *buffer;
     double rms_error;
     struct MOIEncodeParameter enc_param;
+    struct MOIEncoderConfig enc_config;
     struct MOIEncoder *encoder;
     struct MOIDecoder *decoder;
 
@@ -509,14 +558,17 @@ static uint8_t MOIEncoderTest_EncodeDecodeTest(
     }
 
     /* ハンドル作成 */
-    encoder = MOIEncoder_Create(NULL, 0);
+    MOI_SetValidEncoderConfig(&enc_config);
+    enc_config.max_block_size = block_size;
+    encoder = MOIEncoder_Create(&enc_config, NULL, 0);
     decoder = MOIDecoder_Create(NULL, 0);
 
     /* エンコードパラメータをセット */
-    enc_param.num_channels    = num_channels;
-    enc_param.sampling_rate   = wavfile->format.sampling_rate;
+    MOI_SetValidParameter(&enc_param);
+    enc_param.num_channels = num_channels;
+    enc_param.sampling_rate = wavfile->format.sampling_rate;
     enc_param.bits_per_sample = bits_per_sample;
-    enc_param.block_size      = block_size;
+    enc_param.block_size = block_size;
     if (MOIEncoder_SetEncodeParameter(encoder, &enc_param) != MOI_APIRESULT_OK) {
         is_ok = 0;
         goto CHECK_END;
@@ -589,6 +641,7 @@ TEST(MOIEncoder, EncodeTest)
         uint8_t *buffer;
         double rms_error;
         struct MOIEncodeParameter enc_param;
+        struct MOIEncoderConfig enc_config;
         struct MOIEncoder *encoder;
         struct MOIDecoder *decoder;
 
@@ -609,14 +662,16 @@ TEST(MOIEncoder, EncodeTest)
         }
 
         /* ハンドル作成 */
-        encoder = MOIEncoder_Create(NULL, 0);
+        MOI_SetValidEncoderConfig(&enc_config);
+        encoder = MOIEncoder_Create(&enc_config, NULL, 0);
         decoder = MOIDecoder_Create(NULL, 0);
 
         /* エンコードパラメータをセット */
-        enc_param.num_channels    = NUM_CHANNELS;
-        enc_param.sampling_rate   = 8000;
+        MOI_SetValidParameter(&enc_param);
+        enc_param.num_channels = NUM_CHANNELS;
+        enc_param.sampling_rate = 8000;
         enc_param.bits_per_sample = MOI_BITS_PER_SAMPLE;
-        enc_param.block_size      = 256;
+        enc_param.block_size = 256;
         EXPECT_EQ(MOI_APIRESULT_OK, MOIEncoder_SetEncodeParameter(encoder, &enc_param));
 
         /* エンコード */
