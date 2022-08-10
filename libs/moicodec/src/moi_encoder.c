@@ -503,7 +503,7 @@ static MOIError MOIEncoder_EncodeSamples(
                 }
             }
         }
-END: 
+END:
         MOI_ASSERT(j == beam_width);
     }
 
@@ -527,7 +527,7 @@ END:
 /* デコードとは違いstaticに縛る: エンコーダが内部的に状態を持ち、連続でEncodeBlockを呼ぶ必要があるから */
 static MOIApiResult MOIEncoder_EncodeBlock(
         struct MOIEncoder *encoder,
-        const int16_t *const *input, uint32_t num_samples, 
+        const int16_t *const *input, uint32_t num_samples,
         uint8_t *data, uint32_t data_size, uint32_t *output_size)
 {
     MOIError err;
@@ -754,8 +754,7 @@ MOIApiResult MOIEncoder_EncodeWhole(
     data_pos = data + MOIENCODER_HEADER_SIZE;
     while (progress < num_samples) {
         /* エンコードサンプル数の確定 */
-        num_encode_samples 
-            = MOI_MIN_VAL(header.num_samples_per_block, num_samples - progress);
+        num_encode_samples = MOI_MIN_VAL(header.num_samples_per_block, num_samples - progress);
         /* サンプル参照位置のセット */
         for (ch = 0; ch < header.num_channels; ch++) {
             input_ptr[ch] = &input[ch][progress];

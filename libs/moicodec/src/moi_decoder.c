@@ -9,7 +9,7 @@
 
 /* FourCCの一致確認 */
 #define MOI_CHECK_FOURCC(u32lebuf, c1, c2, c3, c4) \
-  ((u32lebuf) == ((c1 << 0) | (c2 << 8) | (c3 << 16) | (c4 << 24)))
+    ((u32lebuf) == ((c1 << 0) | (c2 << 8) | (c3 << 16) | (c4 << 24)))
 
 /* コア処理デコーダ */
 struct MOICoreDecoder {
@@ -23,24 +23,6 @@ struct MOIDecoder {
     struct MOICoreDecoder core_decoder[MOI_MAX_NUM_CHANNELS];
     void *work;
 };
-
-/* 1サンプルデコード */
-static int16_t MOICoreDecoder_DecodeSample(
-        struct MOICoreDecoder *decoder, uint8_t nibble);
-
-/* モノラルブロックのデコード */
-static MOIError MOIDecoder_DecodeBlockMono(
-        struct MOICoreDecoder *core_decoder,
-        const uint8_t *read_pos, uint32_t data_size, 
-        int16_t **buffer, uint32_t buffer_num_samples,
-        uint32_t *num_decode_samples);
-
-/* ステレオブロックのデコード */
-static MOIError MOIDecoder_DecodeBlockStereo(
-        struct MOICoreDecoder *core_decoder,
-        const uint8_t *read_pos, uint32_t data_size, 
-        int16_t **buffer, uint32_t buffer_num_samples, 
-        uint32_t *num_decode_samples);
 
 /* ワークサイズ計算 */
 int32_t MOIDecoder_CalculateWorkSize(void)
@@ -276,7 +258,7 @@ static int16_t MOICoreDecoder_DecodeSample(
 /* モノラルブロックのデコード */
 static MOIError MOIDecoder_DecodeBlockMono(
         struct MOICoreDecoder *core_decoder,
-        const uint8_t *read_pos, uint32_t data_size, 
+        const uint8_t *read_pos, uint32_t data_size,
         int16_t **buffer, uint32_t buffer_num_samples,
         uint32_t *num_decode_samples)
 {
@@ -326,8 +308,8 @@ static MOIError MOIDecoder_DecodeBlockMono(
 /* ステレオブロックのデコード */
 static MOIError MOIDecoder_DecodeBlockStereo(
         struct MOICoreDecoder *core_decoder,
-        const uint8_t *read_pos, uint32_t data_size, 
-        int16_t **buffer, uint32_t buffer_num_samples, 
+        const uint8_t *read_pos, uint32_t data_size,
+        int16_t **buffer, uint32_t buffer_num_samples,
         uint32_t *num_decode_samples)
 {
     uint32_t u32buf;
@@ -402,8 +384,8 @@ static MOIError MOIDecoder_DecodeBlockStereo(
 /* 単一データブロックデコード */
 static MOIApiResult MOIDecoder_DecodeBlock(
         struct MOIDecoder *decoder,
-        const uint8_t *data, uint32_t data_size, 
-        int16_t **buffer, uint32_t buffer_num_channels, uint32_t buffer_num_samples, 
+        const uint8_t *data, uint32_t data_size,
+        int16_t **buffer, uint32_t buffer_num_channels, uint32_t buffer_num_samples,
         uint32_t *num_decode_samples)
 {
     MOIError err;
@@ -425,11 +407,11 @@ static MOIApiResult MOIDecoder_DecodeBlock(
     /* ブロックデコード */
     switch (header->num_channels) {
     case 1:
-        err = MOIDecoder_DecodeBlockMono(decoder->core_decoder, 
+        err = MOIDecoder_DecodeBlockMono(decoder->core_decoder,
                 data, data_size, buffer, buffer_num_samples, num_decode_samples);
         break;
     case 2:
-        err = MOIDecoder_DecodeBlockStereo(decoder->core_decoder, 
+        err = MOIDecoder_DecodeBlockStereo(decoder->core_decoder,
                 data, data_size, buffer, buffer_num_samples, num_decode_samples);
         break;
     default:
@@ -496,7 +478,7 @@ MOIApiResult MOIDecoder_DecodeWhole(
         /* ブロックデコード */
         if ((ret = MOIDecoder_DecodeBlock(decoder,
                         read_pos, read_block_size,
-                        buffer_ptr, buffer_num_channels, buffer_num_samples - progress, 
+                        buffer_ptr, buffer_num_channels, buffer_num_samples - progress,
                         &num_decode_samples)) != MOI_APIRESULT_OK) {
             return ret;
         }

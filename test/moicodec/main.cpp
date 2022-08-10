@@ -374,7 +374,7 @@ TEST(MOIEncoder, CreateDestroyTest)
         MOI_SetValidEncoderConfig(&config);
         work_size = MOIEncoder_CalculateWorkSize(&config);
         EXPECT_TRUE(work_size >= (int32_t)sizeof(struct MOIEncoder));
-        
+
         MOI_SetValidEncoderConfig(&config);
         config.max_block_size = 0;
         work_size = MOIEncoder_CalculateWorkSize(&config);

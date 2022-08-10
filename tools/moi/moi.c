@@ -75,8 +75,8 @@ static int do_decode(const char *adpcm_filename, const char *decoded_filename)
     }
 
     /* 全データをデコード */
-    if ((ret = MOIDecoder_DecodeWhole(decoder, 
-                    buffer, buffer_size, output, 
+    if ((ret = MOIDecoder_DecodeWhole(decoder,
+                    buffer, buffer_size, output,
                     header.num_channels, header.num_samples)) != MOI_APIRESULT_OK) {
         fprintf(stderr, "Failed to decode. API result: %d \n", ret);
         return 1;
@@ -262,7 +262,7 @@ static int do_reconstruction_core(
     }
 
     /* そのままデコード */
-    if ((api_result = MOIDecoder_DecodeWhole(decoder, 
+    if ((api_result = MOIDecoder_DecodeWhole(decoder,
                     buffer, output_size, decoded, num_channels, num_samples)) != MOI_APIRESULT_OK) {
         fprintf(stderr, "Failed to decode. API result: %d \n", api_result);
         return 1;

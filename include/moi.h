@@ -27,7 +27,7 @@ typedef enum {
     MOI_APIRESULT_INSUFFICIENT_DATA,   /* データが足りない             */
     MOI_APIRESULT_PARAMETER_NOT_SET,   /* パラメータがセットされてない */
     MOI_APIRESULT_NG                   /* 分類不能な失敗               */
-} MOIApiResult; 
+} MOIApiResult;
 
 /* IMA-ADPCM形式のwavファイルのヘッダ情報 */
 struct IMAADPCMWAVHeader {
