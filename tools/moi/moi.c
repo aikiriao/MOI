@@ -478,7 +478,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "%s: failed to encode %s. \n", argv[0], input_file);
             return 1;
         }
-    } else if (CommandLineParser_GetOptionAcquired(command_line_spec, "calculate-statistics") == COMMAND_LINE_PARSER_TRUE) {
+    } else if (CommandLineParser_GetOptionAcquired(command_line_spec, "calculate-stats") == COMMAND_LINE_PARSER_TRUE) {
         /* 統計出力処理実行 */
         if (do_calculate_statistics(input_file, (uint16_t)block_size, search_beam_width, search_depth) != 0) {
             fprintf(stderr, "%s: failed to calculate statistics %s. \n", argv[0], input_file);
