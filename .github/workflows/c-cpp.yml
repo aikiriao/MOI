@@ -86,6 +86,6 @@ jobs:
       with:
         name: artifacts
         path: |
-          moi_${VERSION}_${{ matrix.os }}.tar.gz
+          "moi_${VERSION}_${{ matrix.os }}.tar.gz"
       env:
         VERSION: ${{ steps.get_version.outputs.VERSION }}
