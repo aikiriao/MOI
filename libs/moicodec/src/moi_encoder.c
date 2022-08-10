@@ -637,7 +637,7 @@ static MOIError MOIEncoder_ConvertParameterToHeader(
         struct IMAADPCMWAVHeader *header)
 {
     uint32_t block_data_size;
-    struct IMAADPCMWAVHeader tmp_header = {0, };
+    struct IMAADPCMWAVHeader tmp_header = { 0, };
 
     /* 引数チェック */
     if ((parameter == NULL) || (header == NULL)) {
