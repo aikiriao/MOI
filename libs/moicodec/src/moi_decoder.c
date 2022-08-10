@@ -299,7 +299,7 @@ static MOIError MOIDecoder_DecodeBlockMono(
         buffer[0][smpl + 0] = MOICoreDecoder_DecodeSample(core_decoder, nibble[0]);
         buffer[0][smpl + 1] = MOICoreDecoder_DecodeSample(core_decoder, nibble[1]);
     }
-    
+
     /* 末尾サンプル */
     ByteArray_GetUint8(read_pos, &u8buf);
     nibble[0] = (u8buf >> 0) & 0xF;
