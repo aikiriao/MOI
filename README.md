@@ -2,7 +2,7 @@
 
 My Optimized IMA-ADPCM encoder
 
-This encoder is strongly inspired by [adpcm-xq](https://github.com/dbry/adpcm-xq). I applying beam sarch and tree pruning to optimization.
+This encoder is strongly inspired by [adpcm-xq](https://github.com/dbry/adpcm-xq). I applied beam search and tree pruning to optimization.
 
 # How to build
 
