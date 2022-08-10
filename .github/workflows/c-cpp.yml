@@ -1,0 +1,91 @@
+name: C/C++ CI
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-18.04, ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Get the version
+      id: get_version
+      run: echo ::set-output name=VERSION::$(echo $GITHUB_REF | cut -d / -f 3)  
+
+    - name: Preparation on Linux
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+    - name: Preparation on Windows
+      if: runner.os == 'Windows'
+      uses: microsoft/setup-msbuild@v1.0.2
+
+    - name: Build libraries
+      run: |
+        cmake -B build_debug -DCMAKE_BUILD_TYPE=Debug
+        cmake --build build_debug --config Debug
+        cmake -B build_release -DCMAKE_BUILD_TYPE=Release
+        cmake --build build_release --config Release
+    - name: Test
+      run: |
+        pushd build_debug
+        ctest -C Debug
+        popd
+        pushd build_release
+        ctest -C Release
+        popd
+    - name: Build tools
+      run: |
+        pushd tools/moi
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release
+        popd
+    - name: Create artifacts on UNIX platform
+      if: runner.os == 'Linux' || runner.os == 'macOS'
+      run: |
+        ARTIFACT_ROOT=moi_${VERSION}_${{ matrix.os }}
+        mkdir ${ARTIFACT_ROOT} 
+        pushd ${ARTIFACT_ROOT}
+        mkdir include && mkdir libs && mkdir tools
+        popd
+        cp include/*.h ${ARTIFACT_ROOT}/include/
+        cp build_release/libmoicodec.a ${ARTIFACT_ROOT}/libs/
+        cp tools/moi/build/moi ${ARTIFACT_ROOT}/tools/
+        tar -czf ${ARTIFACT_ROOT}.tar.gz ${ARTIFACT_ROOT}
+      env:
+        VERSION: ${{ steps.get_version.outputs.VERSION }}
+    - name: Create artifacts on Windows platform
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        $ARTIFACT_ROOT = "moi_${VERSION}_${{ matrix.os }}"
+        mkdir ${ARTIFACT_ROOT} 
+        pushd ${ARTIFACT_ROOT}
+        mkdir include
+        mkdir libs
+        mkdir tools
+        popd
+        cp include/*.h ${ARTIFACT_ROOT}/include/
+        cp build_release/Release/moicodec.lib ${ARTIFACT_ROOT}/libs/
+        cp tools/moi/build/Release/moi.exe ${ARTIFACT_ROOT}/tools/
+        tar -czf "${ARTIFACT_ROOT}.tar.gz" ${ARTIFACT_ROOT}
+      env:
+        VERSION: ${{ steps.get_version.outputs.VERSION }}
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: artifacts
+        path: |
+          moi_${VERSION}_${{ matrix.os }}.tar.gz
+      env:
+        VERSION: ${{ steps.get_version.outputs.VERSION }}
