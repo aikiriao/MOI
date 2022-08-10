@@ -8,7 +8,7 @@ if(NOT without-test)
     enable_testing()
     # C++環境でないとgtestがビルドできないので、CXXプロジェクトを作る
     # -> Cとの挙動で差異が生じるかもしれない...
-    project(R2samplerTest CXX)
+    project(MOITest CXX)
     if(MSVC)
         set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     else()
