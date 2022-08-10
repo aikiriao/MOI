@@ -264,7 +264,7 @@ static MOIError MOIDecoder_DecodeBlockMono(
 {
     uint8_t u8buf;
     uint8_t nibble[2];
-    uint32_t smpl, tmp_num_decode_samples;
+    uint32_t smp, smpl, tmp_num_decode_samples;
     const uint8_t *read_head = read_pos;
 
     /* 引数チェック */
@@ -291,13 +291,21 @@ static MOIError MOIDecoder_DecodeBlockMono(
     buffer[0][0] = core_decoder->sample_val;
 
     /* ブロックデータデコード */
-    for (smpl = 1; smpl < tmp_num_decode_samples; smpl += 2) {
+    for (smpl = 1; smpl < tmp_num_decode_samples - 2; smpl += 2) {
         MOI_ASSERT((uint32_t)(read_pos - read_head) < data_size);
         ByteArray_GetUint8(read_pos, &u8buf);
         nibble[0] = (u8buf >> 0) & 0xF;
         nibble[1] = (u8buf >> 4) & 0xF;
         buffer[0][smpl + 0] = MOICoreDecoder_DecodeSample(core_decoder, nibble[0]);
         buffer[0][smpl + 1] = MOICoreDecoder_DecodeSample(core_decoder, nibble[1]);
+    }
+    
+    /* 末尾サンプル */
+    ByteArray_GetUint8(read_pos, &u8buf);
+    nibble[0] = (u8buf >> 0) & 0xF;
+    nibble[1] = (u8buf >> 4) & 0xF;
+    for (smp = 0; (smp < 2) && ((smpl + smp) < tmp_num_decode_samples); smp++) {
+        buffer[0][smpl + smp] = MOICoreDecoder_DecodeSample(core_decoder, nibble[smp]);
     }
 
     /* デコードしたサンプル数をセット */
