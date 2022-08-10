@@ -13,10 +13,10 @@
 #define MOI_BITS_PER_SAMPLE 4
 
 /* ビームサーチの最大幅 */
-#define MOI_MAX_BEAM_WIDTH 8
+#define MOI_MAX_SEARCH_BEAM_WIDTH 16
 
 /* 最大先読みサンプル数 */
-#define MOI_MAX_DEPTH 4
+#define MOI_MAX_SEARCH_DEPTH 8
 
 /* API結果型 */
 typedef enum {

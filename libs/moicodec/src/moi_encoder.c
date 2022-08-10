@@ -39,8 +39,8 @@ struct MOIEncoder {
     uint8_t set_parameter;
     struct MOICoreEncoder core_encoder[MOI_MAX_NUM_CHANNELS];
     uint8_t *best_code[MOI_MAX_NUM_CHANNELS];
-    struct MOICoreEncoderCandidate candidate[MOI_MAX_BEAM_WIDTH];
-    struct MOICoreEncoderCandidate backup[MOI_MAX_BEAM_WIDTH];
+    struct MOICoreEncoderCandidate candidate[MOI_MAX_SEARCH_BEAM_WIDTH];
+    struct MOICoreEncoderCandidate backup[MOI_MAX_SEARCH_BEAM_WIDTH];
     void *work;
 };
 
@@ -165,7 +165,7 @@ int32_t MOIEncoder_CalculateWorkSize(const struct MOIEncoderConfig *config)
 
     /* 符号領域 チャンネル数 + 候補 + 候補バックアップ */
     /* 1バイトあたり2サンプル入りうるので2倍確保 */
-    work_size += (MOI_MAX_NUM_CHANNELS + (2 * MOI_MAX_BEAM_WIDTH)) * (MOI_ALIGNMENT + (2 * config->max_block_size));
+    work_size += (MOI_MAX_NUM_CHANNELS + (2 * MOI_MAX_SEARCH_BEAM_WIDTH)) * (MOI_ALIGNMENT + (2 * config->max_block_size));
 
     return work_size;
 }
@@ -209,7 +209,7 @@ struct MOIEncoder *MOIEncoder_Create(
     memset(encoder, 0, sizeof(struct MOIEncoder));
 
     /* 符号領域の割当て */
-    for (i = 0; i < MOI_MAX_BEAM_WIDTH; i++) {
+    for (i = 0; i < MOI_MAX_SEARCH_BEAM_WIDTH; i++) {
         work_ptr = (uint8_t *)MOI_ROUND_UP((uintptr_t)work_ptr, MOI_ALIGNMENT);
         encoder->candidate[i].code = (uint8_t *)work_ptr;
         work_ptr += 2 * config->max_block_size;
@@ -314,34 +314,80 @@ static void MOICoreEncoder_Update(
         = MOI_INNER_VAL(encoder->stepsize_index + MOI_index_table[nibble], 0, 88);
 }
 
-/* 符号語のコストを計算 */
-static double MOICoreEncoder_EvaluateScore(
-        const struct MOICoreEncoder *encoder, const int16_t *sample, uint32_t depth, const uint8_t nibble)
+/* IMA-ADPCMの符号計算 */
+static uint8_t MOICoreEncoder_CalculateIMAADPCMNibble(
+        const struct MOICoreEncoder *encoder, const int16_t sample)
 {
-    uint8_t abs;
-    double cost, mean;
-    int32_t sign;
-    struct MOICoreEncoder tmp = (*encoder);
+    uint8_t nibble;
+    int32_t diff, diffabs, sign;
 
-    /* 現状態のコスト計算 */
-    cost = MOICoreEncoder_CalculateCost(encoder, sample[0], nibble);
+    /* 差分 */
+    diff = sample - encoder->prev_sample;
+    sign = diff < 0;
+    diffabs = sign ? -diff : diff;
 
+    /* 差分を符号表現に変換 */
+    /* nibble = sign(diff) * round(|diff| * 4 / stepsize) */
+    nibble = (uint8_t)MOI_MIN_VAL((diffabs << 2) / MOI_stepsize_table[encoder->stepsize_index], 7);
+
+    /* 符号ビットを付加 */
+    return sign ? (nibble | 0x8) : nibble;
+}
+
+/* 深さdepthでの最小スコア探索 */
+static double MOICoreEncoder_SearchMinScore(
+        const struct MOICoreEncoder *encoder, const int16_t *sample, uint32_t depth, double min)
+{
+    uint8_t abs, killer_nibble;
+    double score;
+    struct MOICoreEncoder next;
+
+    MOI_ASSERT(encoder != NULL);
+    MOI_ASSERT(sample != NULL);
+    MOI_ASSERT(depth <= MOI_MAX_SEARCH_DEPTH);
+
+    /* 先読みの打ち切り */
     if (depth == 0) {
-        return cost;
+        return encoder->total_cost;
     }
 
-    /* 現状態での将来の推定コスト */
-    /* TODO: minとかもあり */
-    MOICoreEncoder_Update(&tmp, sample[0], nibble);
-    sign = (sample[1] - tmp.prev_sample) < 0;
-    mean = 0.0;
-    for (abs = 0; abs <= 7; abs++) {
-        uint8_t nib = sign ? (abs | 8) : abs;
-        mean += MOICoreEncoder_EvaluateScore(&tmp, sample + 1, depth - 1, nib);
+    /* 最小コストを越えていたら探索を打ち切り（枝刈り） */
+    if (encoder->total_cost >= min) {
+        return min;
     }
-    mean /= 8;
 
-    return cost + mean;
+    /* 先にIMA-ADPCMの符号で探索 最も良い可能性が高いため、これ以降の枝刈り増加を期待 */
+    killer_nibble = MOICoreEncoder_CalculateIMAADPCMNibble(encoder, sample[0]);
+    next = (*encoder);
+    MOICoreEncoder_Update(&next, sample[0], killer_nibble);
+    score = MOICoreEncoder_SearchMinScore(&next, sample + 1, depth - 1, min);
+    min = MOI_MIN_VAL(score, min);
+
+    /* 符号候補で探索 */
+    for (abs = 0; abs <= 0x7; abs++) {
+        const uint8_t nibble = (abs | (killer_nibble & 0x8));
+        if (nibble != killer_nibble) {
+            next = (*encoder);
+            MOICoreEncoder_Update(&next, sample[0], nibble);
+            score = MOICoreEncoder_SearchMinScore(&next, sample + 1, depth - 1, min);
+            min = MOI_MIN_VAL(score, min);
+        }
+    }
+
+    return min;
+}
+
+/* nibbleの評価値を計算 */
+static double MOICoreEncoder_EvaluateScore(
+        const struct MOICoreEncoder *encoder, const int16_t *sample, uint32_t depth, uint8_t nibble)
+{
+    struct MOICoreEncoder next = (*encoder);
+
+    /* 評価対象のnibbleで更新 */
+    MOICoreEncoder_Update(&next, sample[0], nibble);
+
+    /* スコア評価 */
+    return MOICoreEncoder_SearchMinScore(&next, sample + 1, depth - 1, FLT_MAX);
 }
 
 /* 小さい方から数えてk番目の要素を取得（配列は破壊される） */
@@ -373,8 +419,8 @@ static MOIError MOIEncoder_EncodeSamples(
         const int16_t *input, uint32_t num_samples, uint32_t *best_index)
 {
     uint32_t i, smpl, beam_width, depth;
-    double score[MOI_MAX_BEAM_WIDTH * MOIENCODER_NUM_CODES];
-    double score_work[MOI_MAX_BEAM_WIDTH * MOIENCODER_NUM_CODES];
+    double score[MOI_MAX_SEARCH_BEAM_WIDTH * MOIENCODER_NUM_CODES];
+    double score_work[MOI_MAX_SEARCH_BEAM_WIDTH * MOIENCODER_NUM_CODES];
     struct MOICoreEncoderCandidate *candidate, *backup;
 
     /* 引数チェック */
@@ -382,13 +428,14 @@ static MOIError MOIEncoder_EncodeSamples(
         return MOI_ERROR_INVALID_ARGUMENT;
     }
 
+    /* オート変数に受ける */
     candidate = encoder->candidate;
     backup = encoder->backup;
     beam_width = encoder->encode_parameter.search_beam_width;
     depth = encoder->encode_parameter.search_depth;
 
-    MOI_ASSERT((beam_width > 0) && (beam_width <= MOI_MAX_BEAM_WIDTH));
-    MOI_ASSERT(depth <= MOI_MAX_DEPTH);
+    MOI_ASSERT((beam_width > 0) && (beam_width <= MOI_MAX_SEARCH_BEAM_WIDTH));
+    MOI_ASSERT((depth > 0) && depth <= MOI_MAX_SEARCH_DEPTH);
 
     /* 初期化 */
     for (i = 0; i < beam_width; i++) {
@@ -406,12 +453,12 @@ static MOIError MOIEncoder_EncodeSamples(
             const struct MOICoreEncoder *core = &(candidate[i].encoder);
             uint8_t abs;
             const int32_t sign = (input[smpl] - core->prev_sample) < 0;
-            const uint32_t init_depth = MOI_MIN_VAL(depth, num_samples - smpl - 1);
+            const uint32_t init_depth = MOI_MIN_VAL(depth, num_samples - smpl);
             for (abs = 0; abs <= 7; abs++) {
                 /* 同一符号の中でコスト計算 */
                 nibble = sign ? (abs | 0x8) : abs;
                 score[(i * MOIENCODER_NUM_CODES) + nibble]
-                    = core->total_cost + MOICoreEncoder_EvaluateScore(core, &input[smpl], init_depth, nibble);
+                    = MOICoreEncoder_EvaluateScore(core, &input[smpl], init_depth, nibble);
                 /* 異なる符号は計算しない（大きなコストを与える） */
                 nibble ^= 0x8;
                 score[(i * MOIENCODER_NUM_CODES) + nibble] = FLT_MAX;

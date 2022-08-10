@@ -2,6 +2,8 @@
 
 My Optimized IMA-ADPCM encoder
 
+This encoder is strongly inspired by [adpcm-xq](https://github.com/dbry/adpcm-xq). I applying beam sarch and tree pruning to optimization.
+
 # How to build
 
 ## Requirement
@@ -19,7 +21,19 @@ cmake --build build
 
 # Usage
 
-## Encoder
+## Encode/Decode
+
+### Encode
+
+```bash
+./moi -e INPUT.wav OUTPUT.wav
+```
+
+### Decode
+
+```bash
+./moi -d INPUT.wav OUTPUT.wav
+```
 
 # License
 
