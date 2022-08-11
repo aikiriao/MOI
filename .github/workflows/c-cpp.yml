@@ -76,7 +76,7 @@ jobs:
         mkdir tools
         popd
         cp include/*.h ${ARTIFACT_ROOT}/include/
-        cp build_release/Release/moicodec.lib ${ARTIFACT_ROOT}/libs/
+        cp build_release/libs/moicodec/Release/moicodec.lib ${ARTIFACT_ROOT}/libs/
         cp tools/moi/build/Release/moi.exe ${ARTIFACT_ROOT}/tools/
         tar -czf "${ARTIFACT_ROOT}.tar.gz" ${ARTIFACT_ROOT}
       env:
