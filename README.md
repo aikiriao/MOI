@@ -35,6 +35,10 @@ cmake --build build
 ./moi -d INPUT.wav OUTPUT.wav
 ```
 
+# TODO
+
+- [ ] Noise shaping
+
 # License
 
 MIT
