@@ -446,7 +446,6 @@ static MOIError MOIEncoder_EncodeSamples(
     for (smpl = 1; smpl < num_samples; smpl++) {
         double threshold;
         uint8_t nibble;
-        uint32_t j;
 
         /* コスト計算 */
         for (i = 0; i < beam_width; i++) {
@@ -487,24 +486,26 @@ static MOIError MOIEncoder_EncodeSamples(
             backup[i].encoder = candidate[i].encoder;
         }
         /* 閾値未満のコストを持つエンコーダを次の候補に選択 */
-        j = 0;
-        for (i = 0; i < beam_width; i++) {
-            for (nibble = 0; nibble <= 0xF; nibble++) {
-                if (score[(i * MOIENCODER_NUM_CODES) + nibble] <= threshold) {
-                    struct MOICoreEncoder entry = backup[i].encoder;
-                    MOICoreEncoder_Update(&entry, input[smpl], nibble);
-                    candidate[j].encoder = entry;
-                    memcpy(candidate[j].code, backup[i].code, sizeof(uint8_t) * smpl);
-                    candidate[j].code[smpl] = nibble;
-                    j++;
-                    if (j == beam_width) {
-                        goto END;
+        {
+            uint32_t n = 0;
+            for (i = 0; i < beam_width; i++) {
+                for (nibble = 0; nibble <= 0xF; nibble++) {
+                    if (score[(i * MOIENCODER_NUM_CODES) + nibble] <= threshold) {
+                        struct MOICoreEncoder entry = backup[i].encoder;
+                        MOICoreEncoder_Update(&entry, input[smpl], nibble);
+                        candidate[n].encoder = entry;
+                        memcpy(candidate[n].code, backup[i].code, sizeof(uint8_t) * smpl);
+                        candidate[n].code[smpl] = nibble;
+                        n++;
+                        if (n == beam_width) {
+                            goto END;
+                        }
                     }
                 }
             }
-        }
 END:
-        MOI_ASSERT(j == beam_width);
+            MOI_ASSERT(n == beam_width);
+        }
     }
 
     /* 最小コストのインデックス探索 */
@@ -686,7 +687,7 @@ static MOIError MOIEncoder_ConvertParameterToHeader(
 MOIApiResult MOIEncoder_SetEncodeParameter(
         struct MOIEncoder *encoder, const struct MOIEncodeParameter *parameter)
 {
-    struct IMAADPCMWAVHeader tmp_header = {0, };
+    struct IMAADPCMWAVHeader tmp_header = { 0, };
 
     /* 引数チェック */
     if ((encoder == NULL) || (parameter == NULL)) {
@@ -768,9 +769,9 @@ MOIApiResult MOIEncoder_EncodeWhole(
         }
 
         /* 進捗更新 */
-        data_pos      += write_size;
-        write_offset  += write_size;
-        progress      += num_encode_samples;
+        data_pos += write_size;
+        write_offset += write_size;
+        progress += num_encode_samples;
         MOI_ASSERT(write_size <= header.block_size);
         MOI_ASSERT(write_offset <= data_size);
     }

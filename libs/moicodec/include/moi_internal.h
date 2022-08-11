@@ -45,7 +45,7 @@ static const int8_t MOI_index_table[16] = {
 };
 
 /* ステップサイズ量子化テーブル */
-static const uint16_t MOI_stepsize_table[89] = {
+static const int16_t MOI_stepsize_table[89] = {
     7,     8,     9,    10,    11,    12,    13,    14,
     16,    17,    19,    21,    23,    25,    28,    31,
     34,    37,    41,    45,    50,    55,    60,    66,
