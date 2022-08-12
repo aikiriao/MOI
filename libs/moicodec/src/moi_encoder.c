@@ -253,21 +253,19 @@ void MOIEncoder_Destroy(struct MOIEncoder *encoder)
 static int32_t MOICoreEncoder_CalculateQuantizedDiff(
         const struct MOICoreEncoder *encoder, const uint8_t nibble)
 {
-    int32_t qdiff, stepsize;
-    const int32_t delta = nibble & 7;
-    const int32_t sign = nibble & 8;
-
-    MOI_ASSERT(encoder != NULL);
     MOI_ASSERT(nibble < MOIENCODER_NUM_CODES);
 
-    /* ステップサイズの取得 */
-    stepsize = MOI_stepsize_table[encoder->stepsize_index];
+    /* 符号値から差分に変換するテーブル */
+    /* sign = (nibble & 8) ? -1 * 1; abs = nibble & 7; sign * (stepsize * ((abs << 1) + 1)) >> 3; */
+    static const int32_t delta_table[16] = {
+        ((0 << 1) + 1), ((1 << 1) + 1), ((2 << 1) + 1), ((3 << 1) + 1),
+        ((4 << 1) + 1), ((5 << 1) + 1), ((6 << 1) + 1), ((7 << 1) + 1),
+        -((0 << 1) + 1), -((1 << 1) + 1), -((2 << 1) + 1), -((3 << 1) + 1),
+        -((4 << 1) + 1), -((5 << 1) + 1), -((6 << 1) + 1), -((7 << 1) + 1),
+    };
 
     /* 量子化した差分を計算 */
-    qdiff = (stepsize * ((delta << 1) + 1)) >> 3;
-
-    /* 符号を適用 */
-    return sign ? -qdiff : qdiff;
+    return (MOI_stepsize_table[encoder->stepsize_index] * delta_table[nibble]) >> 3;
 }
 
 /* 符号語のコストを計算 */
