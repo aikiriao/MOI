@@ -349,17 +349,15 @@ static double MOICoreEncoder_SearchMinScore(
         return encoder->total_cost;
     }
 
-    /* 最小コストを越えていたら探索を打ち切り（枝刈り） */
-    if (encoder->total_cost >= min) {
-        return min;
-    }
-
     /* 先にIMA-ADPCMの符号で探索 最も良い可能性が高いため、これ以降の枝刈り増加を期待 */
     killer_nibble = MOICoreEncoder_CalculateIMAADPCMNibble(encoder, sample[0]);
     next = (*encoder);
     MOICoreEncoder_Update(&next, sample[0], killer_nibble);
-    score = MOICoreEncoder_SearchMinScore(&next, sample + 1, depth - 1, min);
-    min = MOI_MIN_VAL(score, min);
+    /* 更新した時点のコストがこれまでの最小を越えていたら探索しない（コストはdepthに関して単調に増加するため） */
+    if (next.total_cost < min) {
+        score = MOICoreEncoder_SearchMinScore(&next, sample + 1, depth - 1, min);
+        min = MOI_MIN_VAL(score, min);
+    }
 
     /* 符号候補で探索 */
     for (abs = 0; abs <= 0x7; abs++) {
@@ -367,8 +365,10 @@ static double MOICoreEncoder_SearchMinScore(
         if (nibble != killer_nibble) {
             next = (*encoder);
             MOICoreEncoder_Update(&next, sample[0], nibble);
-            score = MOICoreEncoder_SearchMinScore(&next, sample + 1, depth - 1, min);
-            min = MOI_MIN_VAL(score, min);
+            if (next.total_cost < min) {
+                score = MOICoreEncoder_SearchMinScore(&next, sample + 1, depth - 1, min);
+                min = MOI_MIN_VAL(score, min);
+            }
         }
     }
 
