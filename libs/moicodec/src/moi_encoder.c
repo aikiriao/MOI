@@ -28,6 +28,7 @@ struct MOICoreEncoder {
 
 /* エンコーダ候補 */
 struct MOICoreEncoderCandidate {
+    int8_t init_stepsize_index;
     struct MOICoreEncoder encoder;
     uint8_t *code;
 };
@@ -39,6 +40,7 @@ struct MOIEncoder {
     uint8_t set_parameter;
     struct MOICoreEncoder core_encoder[MOI_MAX_NUM_CHANNELS];
     uint8_t *best_code[MOI_MAX_NUM_CHANNELS];
+    int8_t best_init_stepsize_index[MOI_MAX_NUM_CHANNELS];
     struct MOICoreEncoderCandidate candidate[MOI_MAX_SEARCH_BEAM_WIDTH];
     struct MOICoreEncoderCandidate backup[MOI_MAX_SEARCH_BEAM_WIDTH];
     void *work;
@@ -415,16 +417,17 @@ static double MOICoreEncoder_SelectTopK(double *data, uint32_t n, uint32_t k)
 
 /* モノラルブロックのエンコード */
 static MOIError MOIEncoder_EncodeSamples(
-        struct MOIEncoder *encoder, const struct MOICoreEncoder *init_encoder,
-        const int16_t *input, uint32_t num_samples, uint32_t *best_index)
+        struct MOIEncoder *encoder, const int16_t *input, uint32_t num_samples, uint32_t *best_index)
 {
+#define SCORE_SIZE MOI_MAX_VAL(MOI_MAX_SEARCH_BEAM_WIDTH * MOIENCODER_NUM_CODES, MOI_IMAADPCM_STEPSIZE_TABLE_SIZE)
     uint32_t i, smpl, beam_width, depth;
-    double score[MOI_MAX_SEARCH_BEAM_WIDTH * MOIENCODER_NUM_CODES];
-    double score_work[MOI_MAX_SEARCH_BEAM_WIDTH * MOIENCODER_NUM_CODES];
+    double threshold;
+    double score[SCORE_SIZE];
+    double score_work[SCORE_SIZE];
     struct MOICoreEncoderCandidate *candidate, *backup;
 
     /* 引数チェック */
-    if ((encoder == NULL) || (input == NULL) || (best_index == NULL)) {
+    if ((encoder == NULL) || (input == NULL) || (best_index == NULL) || (num_samples == 0)) {
         return MOI_ERROR_INVALID_ARGUMENT;
     }
 
@@ -437,14 +440,43 @@ static MOIError MOIEncoder_EncodeSamples(
     MOI_ASSERT((beam_width > 0) && (beam_width <= MOI_MAX_SEARCH_BEAM_WIDTH));
     MOI_ASSERT((depth > 0) && depth <= MOI_MAX_SEARCH_DEPTH);
 
-    /* 初期化 */
-    for (i = 0; i < beam_width; i++) {
-        candidate[i].encoder = (*init_encoder);
+    /* 初期ステップサイズインデックスの選択 */
+    {
+        struct MOICoreEncoder init;
+
+        /* 各ステップサイズでスコア計算 */
+        init.prev_sample = input[0]; init.total_cost = 0.0;
+        for (i = 0; i < MOI_IMAADPCM_STEPSIZE_TABLE_SIZE; i++) {
+            init.stepsize_index = (int8_t)i;
+            score[i] = MOICoreEncoder_SearchMinScore(&init,
+                    input + 1, MOI_MIN_VAL(depth, num_samples - 1), FLT_MAX);
+        }
+
+        /* 上位選択の閾値 */
+        memcpy(score_work, score, sizeof(double) * MOI_IMAADPCM_STEPSIZE_TABLE_SIZE);
+        threshold = MOICoreEncoder_SelectTopK(score_work, MOI_IMAADPCM_STEPSIZE_TABLE_SIZE, beam_width);
+
+        /* 上位選択 */
+        {
+            uint32_t n = 0;
+            for (i = 0; i < MOI_IMAADPCM_STEPSIZE_TABLE_SIZE; i++) {
+                if (score[i] <= threshold) {
+                    candidate[n].encoder.prev_sample = input[0];
+                    candidate[n].encoder.total_cost = 0.0;
+                    candidate[n].encoder.stepsize_index = (int8_t)i;
+                    candidate[n].init_stepsize_index = (int8_t)i;
+                    n++;
+                    if (n == beam_width) {
+                        break;
+                    }
+                }
+            }
+            MOI_ASSERT(n == beam_width);
+        }
     }
 
     /* ブロックデータエンコード */
     for (smpl = 1; smpl < num_samples; smpl++) {
-        double threshold;
         uint8_t nibble;
 
         /* コスト計算 */
@@ -464,13 +496,6 @@ static MOIError MOIEncoder_EncodeSamples(
             }
         }
 
-        /* 初期段階では全員同一状態なので、先頭要素以外は評価しない */
-        if (smpl == 1) {
-            for (i = MOIENCODER_NUM_CODES; i < MOIENCODER_NUM_CODES * beam_width; i++) {
-                score[i] = score_work[i] = FLT_MAX;
-            }
-        }
-
         /* 上位選択の閾値 */
         memcpy(score_work, score, sizeof(double) * beam_width * MOIENCODER_NUM_CODES);
         threshold = MOICoreEncoder_SelectTopK(score_work, beam_width * MOIENCODER_NUM_CODES, beam_width);
@@ -484,6 +509,7 @@ static MOIError MOIEncoder_EncodeSamples(
         for (i = 0; i < beam_width; i++) {
             memcpy(backup[i].code, candidate[i].code, sizeof(uint8_t) * smpl);
             backup[i].encoder = candidate[i].encoder;
+            backup[i].init_stepsize_index = candidate[i].init_stepsize_index;
         }
         /* 閾値未満のコストを持つエンコーダを次の候補に選択 */
         {
@@ -494,6 +520,7 @@ static MOIError MOIEncoder_EncodeSamples(
                         struct MOICoreEncoder entry = backup[i].encoder;
                         MOICoreEncoder_Update(&entry, input[smpl], nibble);
                         candidate[n].encoder = entry;
+                        candidate[n].init_stepsize_index = backup[i].init_stepsize_index;
                         memcpy(candidate[n].code, backup[i].code, sizeof(uint8_t) * smpl);
                         candidate[n].code[smpl] = nibble;
                         n++;
@@ -522,6 +549,7 @@ END:
     }
 
     return MOI_ERROR_OK;
+#undef SCORE_SIZE
 }
 
 /* 単一データブロックエンコード */
@@ -549,20 +577,11 @@ static MOIApiResult MOIEncoder_EncodeBlock(
     }
     data_pos = data;
 
-    /* ブロックヘッダエンコード */
-    for (ch = 0; ch < parameter->num_channels; ch++) {
-        ByteArray_PutUint16LE(data_pos, input[ch][0]);
-        ByteArray_PutUint8(data_pos, encoder->core_encoder[ch].stepsize_index);
-        ByteArray_PutUint8(data_pos, 0); /* reserved */
-    }
-
     /* 最前符号列の探索 */
     for (ch = 0; ch < parameter->num_channels; ch++) {
         uint32_t best_index;
-        encoder->core_encoder[ch].prev_sample = input[ch][0];
-        encoder->core_encoder[ch].total_cost = 0.0;
         if ((err = MOIEncoder_EncodeSamples(encoder,
-                        &encoder->core_encoder[ch], input[ch], num_samples, &best_index)) != MOI_ERROR_OK) {
+                        input[ch], num_samples, &best_index)) != MOI_ERROR_OK) {
             /* エラーハンドル */
             switch (err) {
             case MOI_ERROR_INVALID_ARGUMENT:
@@ -578,6 +597,14 @@ static MOIApiResult MOIEncoder_EncodeBlock(
         /* 最善の符号列とエンコーダを取得 */
         memcpy(encoder->best_code[ch], encoder->candidate[best_index].code, sizeof(uint8_t) * num_samples);
         encoder->core_encoder[ch] = encoder->candidate[best_index].encoder;
+        encoder->best_init_stepsize_index[ch] = encoder->candidate[best_index].init_stepsize_index;
+    }
+
+    /* ブロックヘッダエンコード */
+    for (ch = 0; ch < parameter->num_channels; ch++) {
+        ByteArray_PutUint16LE(data_pos, input[ch][0]);
+        ByteArray_PutUint8(data_pos, encoder->best_init_stepsize_index[ch]);
+        ByteArray_PutUint8(data_pos, 0); /* reserved */
     }
 
     /* ブロックデータエンコード */

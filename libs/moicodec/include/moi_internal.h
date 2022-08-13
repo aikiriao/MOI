@@ -4,6 +4,9 @@
 /* アラインメント */
 #define MOI_ALIGNMENT 16
 
+/* ステップサイズテーブルサイズ */
+#define MOI_IMAADPCM_STEPSIZE_TABLE_SIZE (sizeof(MOI_stepsize_table) / sizeof(MOI_stepsize_table[0]))
+
 /* nの倍数への切り上げ */
 #define MOI_ROUND_UP(val, n) ((((val) + ((n) - 1)) / (n)) * (n))
 
