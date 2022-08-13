@@ -246,7 +246,7 @@ static int16_t MOICoreDecoder_DecodeSample(
     }
 
     /* 16bit幅にクリップ */
-    predict = MOI_INNER_VAL(predict, -32768, 32767);
+    predict = MOI_INNER_VAL(predict, INT16_MIN, INT16_MAX);
 
     /* 計算結果の反映 */
     decoder->sample_val = (int16_t)predict;
