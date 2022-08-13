@@ -313,7 +313,7 @@ static void MOICoreEncoder_Update(
 
     /* テーブルインデックスの更新 */
     encoder->stepsize_index
-        = MOI_INNER_VAL(encoder->stepsize_index + MOI_index_table[nibble], 0, 88);
+        = MOI_INNER_VAL(encoder->stepsize_index + MOI_index_table[nibble], 0, (int8_t)MOI_IMAADPCM_STEPSIZE_TABLE_SIZE - 1);
 }
 
 /* IMA-ADPCMの符号計算 */

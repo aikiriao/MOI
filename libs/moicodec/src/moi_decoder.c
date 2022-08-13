@@ -229,7 +229,7 @@ static int16_t MOICoreDecoder_DecodeSample(
 
     /* インデックス更新 */
     idx = (int8_t)(idx + MOI_index_table[nibble]);
-    idx = MOI_INNER_VAL(idx, 0, 88);
+    idx = MOI_INNER_VAL(idx, 0, (int8_t)MOI_IMAADPCM_STEPSIZE_TABLE_SIZE - 1);
 
     /* 差分算出 */
     /* diff = stepsize * (delta * 2 + 1) / 8 */
