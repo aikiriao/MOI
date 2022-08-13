@@ -1,6 +1,5 @@
 #include "moi.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -96,7 +95,6 @@ MOIApiResult MOIDecoder_DecodeHeader(
     /* RIFFチャンクID */
     ByteArray_GetUint32LE(data_pos, &u32buf);
     if (!MOI_CHECK_FOURCC(u32buf, 'R', 'I', 'F', 'F')) {
-        fprintf(stderr, "Invalid RIFF chunk id. \n");
         return MOI_APIRESULT_INVALID_FORMAT;
     }
     /* RIFFチャンクサイズ（読み飛ばし） */
@@ -105,32 +103,27 @@ MOIApiResult MOIDecoder_DecodeHeader(
     /* WAVEチャンクID */
     ByteArray_GetUint32LE(data_pos, &u32buf);
     if (!MOI_CHECK_FOURCC(u32buf, 'W', 'A', 'V', 'E')) {
-        fprintf(stderr, "Invalid WAVE chunk id. \n");
         return MOI_APIRESULT_INVALID_FORMAT;
     }
 
     /* FMTチャンクID */
     ByteArray_GetUint32LE(data_pos, &u32buf);
     if (!MOI_CHECK_FOURCC(u32buf, 'f', 'm', 't', ' ')) {
-        fprintf(stderr, "Invalid fmt  chunk id. \n");
         return MOI_APIRESULT_INVALID_FORMAT;
     }
     /* fmtチャンクサイズ */
     ByteArray_GetUint32LE(data_pos, &u32buf);
     if (data_size <= u32buf) {
-        fprintf(stderr, "Data size too small. fmt chunk size:%d data size:%d \n", u32buf, data_size);
         return MOI_APIRESULT_INSUFFICIENT_DATA;
     }
     /* WAVEフォーマットタイプ: IMA-ADPCM以外は受け付けない */
     ByteArray_GetUint16LE(data_pos, &u16buf);
     if (u16buf != 17) {
-        fprintf(stderr, "Unsupported format: %d \n", u16buf);
         return MOI_APIRESULT_INVALID_FORMAT;
     }
     /* チャンネル数 */
     ByteArray_GetUint16LE(data_pos, &u16buf);
     if (u16buf > MOI_MAX_NUM_CHANNELS) {
-        fprintf(stderr, "Unsupported channels: %d \n", u16buf);
         return MOI_APIRESULT_INVALID_FORMAT;
     }
     tmp_header.num_channels = u16buf;
@@ -149,7 +142,6 @@ MOIApiResult MOIDecoder_DecodeHeader(
     /* fmtチャンクのエキストラサイズ: 2以外は想定していない */
     ByteArray_GetUint16LE(data_pos, &u16buf);
     if (u16buf != 2) {
-        fprintf(stderr, "Unsupported fmt chunk extra size: %d \n", u16buf);
         return MOI_APIRESULT_INVALID_FORMAT;
     }
     /* ブロックあたりサンプル数 */
@@ -174,7 +166,6 @@ MOIApiResult MOIDecoder_DecodeHeader(
             ByteArray_GetUint32LE(data_pos, &u32buf);
             /* FACTチャンクサイズ: 4以外は想定していない */
             if (u32buf != 4) {
-                fprintf(stderr, "Unsupported fact chunk size: %d \n", u16buf);
                 return MOI_APIRESULT_INVALID_FORMAT;
             }
             /* サンプル数 */
