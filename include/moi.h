@@ -83,6 +83,13 @@ struct MOIDecoder *MOIDecoder_Create(void *work, int32_t work_size);
 /* デコーダハンドル破棄 */
 void MOIDecoder_Destroy(struct MOIDecoder *decoder);
 
+/* 単一データブロックデコード */
+MOIApiResult MOIDecoder_DecodeBlock(
+        struct MOIDecoder *decoder,
+        const uint8_t *data, uint32_t data_size,
+        int16_t **buffer, uint32_t buffer_num_channels, uint32_t buffer_num_samples,
+        uint32_t *num_decode_samples);
+
 /* ヘッダ含めファイル全体をデコード */
 MOIApiResult MOIDecoder_DecodeWhole(
         struct MOIDecoder *decoder,
@@ -102,6 +109,12 @@ void MOIEncoder_Destroy(struct MOIEncoder *encoder);
 /* エンコードパラメータの設定 */
 MOIApiResult MOIEncoder_SetEncodeParameter(
         struct MOIEncoder *encoder, const struct MOIEncodeParameter *parameter);
+
+/* 単一データブロックエンコード */
+MOIApiResult MOIEncoder_EncodeBlock(
+        struct MOIEncoder *encoder,
+        const int16_t *const *input, uint32_t num_samples,
+        uint8_t *data, uint32_t data_size, uint32_t *output_size);
 
 /* ヘッダ含めファイル全体をエンコード */
 MOIApiResult MOIEncoder_EncodeWhole(

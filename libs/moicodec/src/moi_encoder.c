@@ -553,8 +553,7 @@ END:
 }
 
 /* 単一データブロックエンコード */
-/* デコードとは違いstaticに縛る: エンコーダが内部的に状態を持ち、連続でEncodeBlockを呼ぶ必要があるから */
-static MOIApiResult MOIEncoder_EncodeBlock(
+MOIApiResult MOIEncoder_EncodeBlock(
         struct MOIEncoder *encoder,
         const int16_t *const *input, uint32_t num_samples,
         uint8_t *data, uint32_t data_size, uint32_t *output_size)

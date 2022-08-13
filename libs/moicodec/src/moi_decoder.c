@@ -390,7 +390,7 @@ static MOIError MOIDecoder_DecodeBlockStereo(
 }
 
 /* 単一データブロックデコード */
-static MOIApiResult MOIDecoder_DecodeBlock(
+MOIApiResult MOIDecoder_DecodeBlock(
         struct MOIDecoder *decoder,
         const uint8_t *data, uint32_t data_size,
         int16_t **buffer, uint32_t buffer_num_channels, uint32_t buffer_num_samples,
@@ -492,9 +492,9 @@ MOIApiResult MOIDecoder_DecodeWhole(
         }
 
         /* 進捗更新 */
-        read_pos    += read_block_size;
+        read_pos += read_block_size;
         read_offset += read_block_size;
-        progress    += num_decode_samples;
+        progress += num_decode_samples;
     }
 
     /* 成功終了 */
