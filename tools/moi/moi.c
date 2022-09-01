@@ -26,7 +26,7 @@ static struct CommandLineParserSpecification command_line_spec[] = {
         COMMAND_LINE_PARSER_FALSE, NULL, COMMAND_LINE_PARSER_FALSE },
     { 'v', "version", "Show version information",
         COMMAND_LINE_PARSER_FALSE, NULL, COMMAND_LINE_PARSER_FALSE },
-    { 0, NULL,  }
+    { 0, }
 };
 
 /* デコード処理 */
