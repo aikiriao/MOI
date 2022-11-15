@@ -37,6 +37,7 @@ cmake --build build
 
 # TODO
 
+- [ ] Evaluation (plot CPU time v.s. RMSE)
 - [ ] Noise shaping
 
 # License
