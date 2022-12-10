@@ -5,7 +5,7 @@
 #define MOI_ALIGNMENT 16
 
 /* ステップサイズテーブルサイズ */
-#define MOI_IMAADPCM_STEPSIZE_TABLE_SIZE (sizeof(MOI_stepsize_table) / sizeof(MOI_stepsize_table[0]))
+#define MOI_IMAADPCM_STEPSIZE_TABLE_SIZE (sizeof(IMAADPCM_stepsize_table) / sizeof(IMAADPCM_stepsize_table[0]))
 
 /* nの倍数への切り上げ */
 #define MOI_ROUND_UP(val, n) ((((val) + ((n) - 1)) / (n)) * (n))
@@ -42,13 +42,13 @@ typedef enum {
 } MOIError;
 
 /* インデックス変動テーブル */
-static const int8_t MOI_index_table[16] = {
+static const int8_t IMAADPCM_index_table[16] = {
     -1, -1, -1, -1, 2, 4, 6, 8,
     -1, -1, -1, -1, 2, 4, 6, 8
 };
 
 /* ステップサイズ量子化テーブル */
-static const int16_t MOI_stepsize_table[89] = {
+static const int16_t IMAADPCM_stepsize_table[89] = {
     7,     8,     9,    10,    11,    12,    13,    14,
     16,    17,    19,    21,    23,    25,    28,    31,
     34,    37,    41,    45,    50,    55,    60,    66,

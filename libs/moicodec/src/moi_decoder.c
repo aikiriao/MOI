@@ -216,10 +216,10 @@ static int16_t MOICoreDecoder_DecodeSample(
     idx = decoder->stepsize_index;
 
     /* ステップサイズの取得 */
-    stepsize = MOI_stepsize_table[idx];
+    stepsize = IMAADPCM_stepsize_table[idx];
 
     /* インデックス更新 */
-    idx = (int8_t)(idx + MOI_index_table[nibble]);
+    idx = (int8_t)(idx + IMAADPCM_index_table[nibble]);
     idx = MOI_INNER_VAL(idx, 0, (int8_t)MOI_IMAADPCM_STEPSIZE_TABLE_SIZE - 1);
 
     /* 差分算出 */

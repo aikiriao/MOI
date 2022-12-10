@@ -261,7 +261,7 @@ static int32_t MOICoreEncoder_CalculateQuantizedDiff(
     MOI_ASSERT(nibble < MOIENCODER_NUM_CODES);
 
     /* ステップサイズの取得 */
-    stepsize = MOI_stepsize_table[encoder->stepsize_index];
+    stepsize = IMAADPCM_stepsize_table[encoder->stepsize_index];
 
     /* 量子化した差分を計算 */
     qdiff = (stepsize * ((delta << 1) + 1)) >> 3;
@@ -311,7 +311,7 @@ static void MOICoreEncoder_Update(
 
     /* テーブルインデックスの更新 */
     encoder->stepsize_index
-        = MOI_INNER_VAL(encoder->stepsize_index + MOI_index_table[nibble], 0, (int8_t)MOI_IMAADPCM_STEPSIZE_TABLE_SIZE - 1);
+        = MOI_INNER_VAL(encoder->stepsize_index + IMAADPCM_index_table[nibble], 0, (int8_t)MOI_IMAADPCM_STEPSIZE_TABLE_SIZE - 1);
 }
 
 /* IMA-ADPCMの符号計算 */
@@ -328,7 +328,7 @@ static uint8_t MOICoreEncoder_CalculateIMAADPCMNibble(
 
     /* 差分を符号表現に変換 */
     /* nibble = sign(diff) * round(|diff| * 4 / stepsize) */
-    nibble = (uint8_t)MOI_MIN_VAL((diffabs << 2) / MOI_stepsize_table[encoder->stepsize_index], 7);
+    nibble = (uint8_t)MOI_MIN_VAL((diffabs << 2) / IMAADPCM_stepsize_table[encoder->stepsize_index], 7);
 
     /* 符号ビットを付加 */
     return sign ? (nibble | 0x8) : nibble;
