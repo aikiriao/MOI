@@ -17,6 +17,9 @@
 /* 符号語の個数 */
 #define MOIENCODER_NUM_CODES (1 << MOI_BITS_PER_SAMPLE)
 
+/* 量子化誤差の計算 */
+#define MOICoreEncoder_CalculateQuantizedDiff(encoder, nibble) MOI_qdiff_table[(encoder)->stepsize_index][(nibble)]
+
 /* コア処理エンコーダ */
 struct MOICoreEncoder {
     int16_t prev_sample; /* サンプル値 */
@@ -249,42 +252,20 @@ void MOIEncoder_Destroy(struct MOIEncoder *encoder)
     }
 }
 
-/* 量子化した差分を符号語から計算 */
-static int32_t MOICoreEncoder_CalculateQuantizedDiff(
-        const struct MOICoreEncoder *encoder, const uint8_t nibble)
-{
-    int32_t qdiff, stepsize;
-    const int32_t delta = nibble & 7;
-    const int32_t sign = nibble & 8;
-
-    MOI_ASSERT(encoder != NULL);
-    MOI_ASSERT(nibble < MOIENCODER_NUM_CODES);
-
-    /* ステップサイズの取得 */
-    stepsize = IMAADPCM_stepsize_table[encoder->stepsize_index];
-
-    /* 量子化した差分を計算 */
-    qdiff = (stepsize * ((delta << 1) + 1)) >> 3;
-
-    /* 符号を適用 */
-    return sign ? -qdiff : qdiff;
-}
-
 /* 符号語のコストを計算 */
 static double MOICoreEncoder_CalculateCost(
-        const struct MOICoreEncoder *encoder, const int16_t sample, const uint8_t nibble)
+        const struct MOICoreEncoder *encoder, const int32_t sample, const uint8_t nibble)
 {
     double err;
-    int32_t qdiff;
 
     MOI_ASSERT(encoder != NULL);
     MOI_ASSERT(nibble < MOIENCODER_NUM_CODES);
 
     /* 量子化した差分を計算 */
-    qdiff = MOICoreEncoder_CalculateQuantizedDiff(encoder, nibble);
+    err = MOICoreEncoder_CalculateQuantizedDiff(encoder, nibble);
 
     /* 量子化した差分により次の値を予測し、真のサンプルとの差をとる */
-    err = encoder->prev_sample + qdiff - sample;
+    err += encoder->prev_sample - sample;
 
     /* 差の2乗をコストとする */
     return err * err;
@@ -326,12 +307,32 @@ static uint8_t MOICoreEncoder_CalculateIMAADPCMNibble(
     sign = diff < 0;
     diffabs = sign ? -diff : diff;
 
+#if 0
     /* 差分を符号表現に変換 */
     /* nibble = sign(diff) * round(|diff| * 4 / stepsize) */
     nibble = (uint8_t)MOI_MIN_VAL((diffabs << 2) / IMAADPCM_stepsize_table[encoder->stepsize_index], 7);
 
     /* 符号ビットを付加 */
     return sign ? (nibble | 0x8) : nibble;
+#else
+    /* IMA-ADPCMリファレンス実装 */
+    nibble = sign ? 8 : 0;
+    {
+        uint32_t i;
+        uint8_t mask = 4;
+        uint16_t stepsize = IMAADPCM_stepsize_table[encoder->stepsize_index];
+
+        for (i = 0; i < 3; i++) {
+            if (diffabs >= stepsize) {
+                nibble |= mask;
+                diffabs -= stepsize;
+            }
+            stepsize >>= 1;
+            mask >>= 1;
+        }
+    }
+    return nibble;
+#endif
 }
 
 /* 深さdepthでの最小スコア探索 */
@@ -417,7 +418,8 @@ static double MOICoreEncoder_SelectTopK(double *data, uint32_t n, uint32_t k)
 static MOIError MOIEncoder_EncodeSamples(
         struct MOIEncoder *encoder, const int16_t *input, uint32_t num_samples, uint32_t *best_index)
 {
-#define SCORE_SIZE MOI_MAX_VAL(MOI_MAX_SEARCH_BEAM_WIDTH * MOIENCODER_NUM_CODES, MOI_IMAADPCM_STEPSIZE_TABLE_SIZE)
+#define HALF_NUM_CODES (MOIENCODER_NUM_CODES / 2)
+#define SCORE_SIZE MOI_MAX_VAL(MOI_MAX_SEARCH_BEAM_WIDTH * HALF_NUM_CODES, MOI_IMAADPCM_STEPSIZE_TABLE_SIZE)
     uint32_t i, smpl, beam_width, depth;
     double threshold;
     double score[SCORE_SIZE];
@@ -480,23 +482,21 @@ static MOIError MOIEncoder_EncodeSamples(
         /* コスト計算 */
         for (i = 0; i < beam_width; i++) {
             const struct MOICoreEncoder *core = &(candidate[i].encoder);
-            uint8_t abs;
-            const int32_t sign = (input[smpl] - core->prev_sample) < 0;
             const uint32_t init_depth = MOI_MIN_VAL(depth, num_samples - smpl);
-            for (abs = 0; abs <= 7; abs++) {
+            const uint8_t sign = ((input[smpl] - core->prev_sample) < 0) ? 8 : 0;
+            uint8_t abs;
+            for (abs = 0; abs < HALF_NUM_CODES; abs++) {
                 /* 同一符号の中でコスト計算 */
-                nibble = sign ? (abs | 0x8) : abs;
-                score[(i * MOIENCODER_NUM_CODES) + nibble]
-                    = MOICoreEncoder_EvaluateScore(core, &input[smpl], init_depth, nibble);
-                /* 異なる符号は計算しない（大きなコストを与える） */
-                nibble ^= 0x8;
-                score[(i * MOIENCODER_NUM_CODES) + nibble] = FLT_MAX;
+                score[i * HALF_NUM_CODES + abs]
+                    = MOICoreEncoder_EvaluateScore(core, &input[smpl], init_depth, abs | sign);
             }
         }
 
+        /* TODO: IMA-ADPCM系列のエンコーダを残しておいてそちらがよければそっちを使う */
+
         /* 上位選択の閾値 */
-        memcpy(score_work, score, sizeof(double) * beam_width * MOIENCODER_NUM_CODES);
-        threshold = MOICoreEncoder_SelectTopK(score_work, beam_width * MOIENCODER_NUM_CODES, beam_width);
+        memcpy(score_work, score, sizeof(double) * beam_width * HALF_NUM_CODES);
+        threshold = MOICoreEncoder_SelectTopK(score_work, beam_width * HALF_NUM_CODES, beam_width);
         /* 最大値が小さい場合の対策 */
         if (threshold < FLT_MIN) {
             threshold = FLT_MIN;
@@ -512,10 +512,12 @@ static MOIError MOIEncoder_EncodeSamples(
         /* 閾値未満のコストを持つエンコーダを次の候補に選択 */
         {
             uint32_t n = 0;
+            uint8_t abs;
             for (i = 0; i < beam_width; i++) {
-                for (nibble = 0; nibble <= 0xF; nibble++) {
-                    if (score[(i * MOIENCODER_NUM_CODES) + nibble] <= threshold) {
+                for (abs = 0; abs < HALF_NUM_CODES; abs++) {
+                    if (score[i * HALF_NUM_CODES + abs] <= threshold) {
                         struct MOICoreEncoder entry = backup[i].encoder;
+                        nibble = ((input[smpl] - entry.prev_sample) < 0) ? (abs | 0x8) : abs;
                         MOICoreEncoder_Update(&entry, input[smpl], nibble);
                         candidate[n].encoder = entry;
                         candidate[n].init_stepsize_index = backup[i].init_stepsize_index;
