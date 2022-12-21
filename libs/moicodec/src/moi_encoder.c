@@ -525,12 +525,12 @@ static MOIError MOIEncoder_EncodeSamples(
                         candidate[n].code[smpl] = nibble;
                         n++;
                         if (n == beam_width) {
-                            goto END;
+                            goto SELECT_END;
                         }
                     }
                 }
             }
-END:
+SELECT_END:
             MOI_ASSERT(n == beam_width);
         }
     }
