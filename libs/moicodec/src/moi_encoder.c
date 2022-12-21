@@ -343,7 +343,7 @@ static double MOICoreEncoder_SearchMinScore(
         const struct MOICoreEncoder *encoder, const int16_t *sample, uint32_t depth, double min)
 {
     uint8_t abs, killer_nibble;
-    double score;
+    double score, killer_cost;
     struct MOICoreEncoder next;
 
     MOI_ASSERT(encoder != NULL);
@@ -355,10 +355,18 @@ static double MOICoreEncoder_SearchMinScore(
         return encoder->total_cost;
     }
 
-    /* 先にIMA-ADPCMの符号で探索 最も良い可能性が高いため、これ以降の枝刈り増加を期待 */
+    /* 先にIMA-ADPCMの符号とコストを計算
+     * 最も良い可能性が高いため、これ以降の枝刈り増加を期待 */
     killer_nibble = MOICoreEncoder_CalculateIMAADPCMNibble(encoder, sample[0]);
+    killer_cost = encoder->total_cost + MOICoreEncoder_CalculateCost(encoder, sample[0], killer_nibble);
+
+    /* 深さ1の場合はIMA-ADPCMの符号が最善 */
+    if (depth == 1) {
+        return killer_cost;
+    }
+
     /* 更新した時点のコストがこれまでの最小を越えていたら探索しない（コストはdepthに関して単調に増加するため） */
-    if ((encoder->total_cost + MOICoreEncoder_CalculateCost(encoder, sample[0], killer_nibble)) < min) {
+    if (killer_cost < min) {
         next = (*encoder);
         MOICoreEncoder_Update(&next, sample[0], killer_nibble);
         score = MOICoreEncoder_SearchMinScore(&next, sample + 1, depth - 1, min);
