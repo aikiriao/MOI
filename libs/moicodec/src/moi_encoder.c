@@ -577,6 +577,7 @@ SELECT_END:
 
     return MOI_ERROR_OK;
 #undef SCORE_SIZE
+#undef HALF_NUM_CODES
 }
 
 /* 単一データブロックエンコード */
