@@ -443,7 +443,7 @@ static MOIError MOIEncoder_EncodeSamples(
     defalut_enc = &(encoder->default_candidate);
 
     MOI_ASSERT((beam_width > 0) && (beam_width <= MOI_MAX_SEARCH_BEAM_WIDTH));
-    MOI_ASSERT((depth > 0) && depth <= MOI_MAX_SEARCH_DEPTH);
+    MOI_ASSERT((depth > 0) && (depth <= MOI_MAX_SEARCH_DEPTH));
 
     /* 初期ステップサイズインデックスの選択 */
     {
