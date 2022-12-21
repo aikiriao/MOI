@@ -26,6 +26,9 @@ if __name__ == "__main__":
     DURATION_TIME = 4
     t = np.arange(0, RATE*DURATION_TIME) / RATE
 
+    # 乱数シード固定
+    np.random.seed(0)
+
     # テストデータ作成
     SIGNALS = {
             'sin100Hz.wav': np.sin(2.0 * np.pi * 100 * t),
