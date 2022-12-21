@@ -24,11 +24,11 @@
 #define MOI_STATIC_ASSERT(expr) { void static_assertion_failed(char dummy[(expr) ? 1 : -1]); }
 
 /* アサートマクロ */
-#ifdef DEBUG
+#ifdef NDEBUG
+#define MOI_ASSERT(condition) (void)(condition)
+#else
 #include <assert.h>
 #define MOI_ASSERT(condition) assert(condition)
-#else
-#define MOI_ASSERT(condition) (void)(condition)
 #endif
 
 /* 内部エラー型 */
