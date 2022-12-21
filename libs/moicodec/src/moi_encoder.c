@@ -356,7 +356,7 @@ static double MOICoreEncoder_SearchMinScore(
     }
 
     /* 先にIMA-ADPCMの符号とコストを計算
-     * 最も良い可能性が高いため、これ以降の枝刈り増加を期待 */
+    * 最も良い可能性が高いため、これ以降の枝刈り増加を期待 */
     killer_nibble = MOICoreEncoder_CalculateIMAADPCMNibble(encoder, sample[0]);
     killer_cost = encoder->total_cost + MOICoreEncoder_CalculateCost(encoder, sample[0], killer_nibble);
 
