@@ -295,7 +295,7 @@ static void MOICoreEncoder_Update(
 
     /* テーブルインデックスの更新 */
     encoder->stepsize_index
-        = MOI_INNER_VAL(encoder->stepsize_index + IMAADPCM_index_table[nibble], 0, (int8_t)MOI_IMAADPCM_STEPSIZE_TABLE_SIZE - 1);
+        = (int8_t)MOI_INNER_VAL(encoder->stepsize_index + IMAADPCM_index_table[nibble], 0, (int8_t)MOI_IMAADPCM_STEPSIZE_TABLE_SIZE - 1);
 }
 
 /* IMA-ADPCMの符号計算 */
@@ -323,7 +323,7 @@ static uint8_t MOICoreEncoder_CalculateIMAADPCMNibble(
     {
         uint32_t i;
         uint8_t mask = 4;
-        uint16_t stepsize = IMAADPCM_stepsize_table[encoder->stepsize_index];
+        int16_t stepsize = IMAADPCM_stepsize_table[encoder->stepsize_index];
 
         for (i = 0; i < 3; i++) {
             if (diffabs >= stepsize) {
@@ -375,7 +375,7 @@ static double MOICoreEncoder_SearchMinScore(
 
     /* 符号候補で探索 */
     for (abs = 0; abs <= 0x7; abs++) {
-        const uint8_t nibble = (abs | (killer_nibble & 0x8));
+        const uint8_t nibble = (uint8_t)(abs | (killer_nibble & 0x8));
         if (nibble != killer_nibble) {
             if ((encoder->total_cost + MOICoreEncoder_CalculateCost(encoder, sample[0], nibble)) < min) {
                 next = (*encoder);
